@@ -10,7 +10,7 @@ TARGET_DIR="${SRC_ROOT}/target"
 
 GENERATED_DIR="${SRC_ROOT}/generated"
 if [ -d "${GENERATED_DIR}" ]; then rm -rf "${GENERATED_DIR}"; fi
-mkdir -p ${GENERATED_DIR}/{macos,simulator}
+mkdir -p ${GENERATED_DIR}/{macos,simulator,watchos,watchos-simulator}
 
 REL_FLAG="--release"
 REL_TYPE_DIR="release"
@@ -23,25 +23,37 @@ TARGET_CRATE=matrix-sdk-crypto-ffi
 export IOS_SDK_PATH=`xcrun --show-sdk-path --sdk iphoneos`
 
 # iOS
-echo -e "Building for iOS [1/5]"
+echo -e "Building for iOS [1/9]"
 cargo build -p ${TARGET_CRATE} ${REL_FLAG} --target "aarch64-apple-ios"
 
-# MacOS
-echo -e "\nBuilding for macOS (Apple Silicon) [2/5]"
+# macOS
+echo -e "\nBuilding for macOS (Apple Silicon) [2/9]"
 cargo build -p ${TARGET_CRATE} ${REL_FLAG} --target "aarch64-apple-darwin"
-echo -e "\nBuilding for macOS (Intel) [3/5]"
+echo -e "\nBuilding for macOS (Intel) [3/9]"
 cargo build -p ${TARGET_CRATE} ${REL_FLAG} --target "x86_64-apple-darwin"
 
 # iOS Simulator
-echo -e "\nBuilding for iOS Simulator (Apple Silicon) [4/5]"
+echo -e "\nBuilding for iOS Simulator (Apple Silicon) [4/9]"
 cargo build -p ${TARGET_CRATE} ${REL_FLAG} --target "aarch64-apple-ios-sim"
-echo -e "\nBuilding for iOS Simulator (Intel) [5/5]"
+echo -e "\nBuilding for iOS Simulator (Intel) [5/9]"
 cargo build -p ${TARGET_CRATE} ${REL_FLAG} --target "x86_64-apple-ios"
 
-echo -e "\nCreating XCFramework"
+# watchOS
+echo -e "\nBuilding for watchOS (ARM 64_32) [6/9]"
+cargo +nightly build -p ${TARGET_CRATE} ${REL_FLAG} -Zbuild-std --target "arm64_32-apple-watchos"
+echo -e "\nBuilding for watchOS Simulator (ARM 32) [7/9]"
+cargo +nightly build -p ${TARGET_CRATE} ${REL_FLAG} -Zbuild-std --target "armv7k-apple-watchos"
+
+# # watchOS Simulator
+echo -e "\nBuilding for watchOS Simulator (Apple Silicon) [8/9]"
+cargo +nightly build -p ${TARGET_CRATE} ${REL_FLAG} -Zbuild-std --target "aarch64-apple-watchos-sim"
+echo -e "\nBuilding for watchOS Simulator (Intel) [9/9]"
+cargo +nightly build -p ${TARGET_CRATE} ${REL_FLAG} -Zbuild-std --target "x86_64-apple-watchos-sim"
+
+echo -e "\nLipo Binaries"
 # Lipo together the libraries for the same platform
 
-# MacOS
+# macOS
 lipo -create \
   "${TARGET_DIR}/x86_64-apple-darwin/${REL_TYPE_DIR}/libmatrix_sdk_crypto_ffi.a" \
   "${TARGET_DIR}/aarch64-apple-darwin/${REL_TYPE_DIR}/libmatrix_sdk_crypto_ffi.a" \
@@ -53,6 +65,19 @@ lipo -create \
   "${TARGET_DIR}/aarch64-apple-ios-sim/${REL_TYPE_DIR}/libmatrix_sdk_crypto_ffi.a" \
   -output "${GENERATED_DIR}/simulator/libmatrix_sdk_crypto_ffi.a"
 
+# watchOS
+  lipo -create \
+    "${TARGET_DIR}/arm64_32-apple-watchos/${REL_TYPE_DIR}/libmatrix_sdk_crypto_ffi.a" \
+    "${TARGET_DIR}/armv7k-apple-watchos/${REL_TYPE_DIR}/libmatrix_sdk_crypto_ffi.a" \
+    -output "${GENERATED_DIR}/watchos/libmatrix_sdk_crypto_ffi.a"
+
+# watchOS Simulator
+  lipo -create \
+    "${TARGET_DIR}/aarch64-apple-watchos-sim/${REL_TYPE_DIR}/libmatrix_sdk_crypto_ffi.a" \
+    "${TARGET_DIR}/x86_64-apple-watchos-sim/${REL_TYPE_DIR}/libmatrix_sdk_crypto_ffi.a" \
+    -output "${GENERATED_DIR}/watchos-simulator/libmatrix_sdk_crypto_ffi.a"
+
+echo -e "\nGernerating Uniffi Bindings"
 # Generate uniffi files
 cargo uniffi-bindgen generate \
   --language swift \
@@ -78,6 +103,7 @@ mv ${GENERATED_DIR}/*.swift ${SWIFT_DIR}
 
 if [ -d "${GENERATED_DIR}/MatrixSDKCryptoFFI.xcframework" ]; then rm -rf "${GENERATED_DIR}/MatrixSDKCryptoFFI.xcframework"; fi
 
+echo -e "\nCreating Framework"
 xcodebuild -create-xcframework \
   -library "${TARGET_DIR}/aarch64-apple-ios/${REL_TYPE_DIR}/libmatrix_sdk_crypto_ffi.a" \
   -headers ${HEADERS_DIR} \
@@ -85,13 +111,21 @@ xcodebuild -create-xcframework \
   -headers ${HEADERS_DIR} \
   -library "${GENERATED_DIR}/simulator/libmatrix_sdk_crypto_ffi.a" \
   -headers ${HEADERS_DIR} \
+  -library "${GENERATED_DIR}/watchos/libmatrix_sdk_crypto_ffi.a" \
+  -headers ${HEADERS_DIR} \
+  -library "${TARGET_DIR}/aarch64-apple-watchos-sim/${REL_TYPE_DIR}/libmatrix_sdk_crypto_ffi.a" \
+  -headers ${HEADERS_DIR} \
   -output "${GENERATED_DIR}/MatrixSDKCryptoFFI.xcframework"
 
+echo -e "\nCleanup"
 # Cleanup
 if [ -d "${GENERATED_DIR}/macos" ]; then rm -rf "${GENERATED_DIR}/macos"; fi
 if [ -d "${GENERATED_DIR}/simulator" ]; then rm -rf "${GENERATED_DIR}/simulator"; fi
+if [ -d "${GENERATED_DIR}/watchos" ]; then rm -rf "${GENERATED_DIR}/watchos"; fi
+if [ -d "${GENERATED_DIR}/watchos-simulator" ]; then rm -rf "${GENERATED_DIR}/watchos-simulator"; fi
 if [ -d ${HEADERS_DIR} ]; then rm -rf ${HEADERS_DIR}; fi
 
+echo -e "\nZipping Output"
 # Zip up framework, sources and LICENSE, ready to be uploaded to GitHub Releases and used by MatrixSDKCrypto.podspec
 cp ${SRC_ROOT}/LICENSE $GENERATED_DIR
 cd $GENERATED_DIR
