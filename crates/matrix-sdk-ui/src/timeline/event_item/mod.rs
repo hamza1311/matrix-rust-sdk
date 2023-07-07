@@ -455,6 +455,7 @@ impl<T> TimelineDetails<T> {
 
 /// Where this event came.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum EventItemOrigin {
     /// The event was created locally.
     Local,

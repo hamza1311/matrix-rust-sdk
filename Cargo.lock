@@ -3455,6 +3455,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unicode-normalization",
+ "uniffi",
  "wiremock",
 ]
 
