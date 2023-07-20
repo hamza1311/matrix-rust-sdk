@@ -233,13 +233,14 @@ impl Room {
         &self,
         listener: Box<dyn TimelineListener>,
     ) -> RoomTimelineListenerResult {
+        let room = self.inner.clone();
+        let timeline = self.timeline.clone();
+
         tokio::spawn(async move {
-            let timeline = self
-                .timeline
+            let timeline = timeline
                 .write()
                 .await
                 .get_or_insert_with(|| {
-                    let room = self.inner.clone();
                     let timeline = RUNTIME.block_on(room.timeline());
                     Arc::new(timeline)
                 })
