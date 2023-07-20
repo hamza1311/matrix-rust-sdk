@@ -233,31 +233,35 @@ impl Room {
         &self,
         listener: Box<dyn TimelineListener>,
     ) -> RoomTimelineListenerResult {
-        let timeline = self
-            .timeline
-            .write()
-            .await
-            .get_or_insert_with(|| {
-                let room = self.inner.clone();
-                let timeline = RUNTIME.block_on(room.timeline());
-                Arc::new(timeline)
-            })
-            .clone();
+        tokio::spawn(async move {
+            let timeline = self
+                .timeline
+                .write()
+                .await
+                .get_or_insert_with(|| {
+                    let room = self.inner.clone();
+                    let timeline = RUNTIME.block_on(room.timeline());
+                    Arc::new(timeline)
+                })
+                .clone();
 
-        let (timeline_items, timeline_stream) = timeline.subscribe().await;
+            let (timeline_items, timeline_stream) = timeline.subscribe().await;
 
-        let timeline_stream = TaskHandle::new(RUNTIME.spawn(async move {
-            pin_mut!(timeline_stream);
+            let timeline_stream = TaskHandle::new(RUNTIME.spawn(async move {
+                pin_mut!(timeline_stream);
 
-            while let Some(diff) = timeline_stream.next().await {
-                listener.on_update(Arc::new(TimelineDiff::new(diff)));
+                while let Some(diff) = timeline_stream.next().await {
+                    listener.on_update(Arc::new(TimelineDiff::new(diff)));
+                }
+            }));
+
+            RoomTimelineListenerResult {
+                items: timeline_items.into_iter().map(TimelineItem::from_arc).collect(),
+                items_stream: Arc::new(timeline_stream),
             }
-        }));
-
-        RoomTimelineListenerResult {
-            items: timeline_items.into_iter().map(TimelineItem::from_arc).collect(),
-            items_stream: Arc::new(timeline_stream),
-        }
+        })
+        .await
+        .unwrap()
     }
 
     pub fn subscribe_to_back_pagination_status(
