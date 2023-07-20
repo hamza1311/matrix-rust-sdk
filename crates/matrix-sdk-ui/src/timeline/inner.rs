@@ -48,7 +48,7 @@ use ruma::{
     EventId, MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedTransactionId, OwnedUserId,
     TransactionId, UserId,
 };
-use tokio::sync::{Mutex, MutexGuard};
+use tokio::sync::MutexGuard;
 use tracing::{debug, error, field::debug, info, instrument, trace, warn};
 #[cfg(feature = "e2e-encryption")]
 use tracing::{field, info_span, Instrument as _};
@@ -70,11 +70,11 @@ use super::{
     ReactionSenderData, RelativePosition, RepliedToEvent, TimelineDetails, TimelineItem,
     TimelineItemContent, TimelineItemKind,
 };
-use crate::events::SyncTimelineEventWithoutContent;
+use crate::{debug::DebugMutex, events::SyncTimelineEventWithoutContent};
 
 #[derive(Clone, Debug)]
 pub(super) struct TimelineInner<P: RoomDataProvider = Room> {
-    state: Arc<Mutex<TimelineInnerState>>,
+    state: Arc<DebugMutex<TimelineInnerState>>,
     room_data_provider: P,
     settings: TimelineInnerSettings,
 }
@@ -156,7 +156,7 @@ impl<P: RoomDataProvider> TimelineInner<P> {
             ..Default::default()
         };
         Self {
-            state: Arc::new(Mutex::new(state)),
+            state: Arc::new(DebugMutex::new(state)),
             room_data_provider,
             settings: TimelineInnerSettings::default(),
         }
@@ -765,7 +765,7 @@ impl<P: RoomDataProvider> TimelineInner<P> {
     ) {
         use super::EncryptedMessage;
 
-        let mut state = self.state.clone().lock_owned().await;
+        let mut state = self.state.lock().await;
 
         let should_retry = move |session_id: &str| {
             if let Some(session_ids) = &session_ids {
@@ -801,7 +801,7 @@ impl<P: RoomDataProvider> TimelineInner<P> {
         let room_data_provider = self.room_data_provider.clone();
         let push_rules_context = room_data_provider.push_rules_and_context().await;
 
-        matrix_sdk::executor::spawn(async move {
+        {
             let retry_one = |item: Arc<TimelineItem>| {
                 let decryptor = decryptor.clone();
                 let should_retry = &should_retry;
@@ -878,7 +878,7 @@ impl<P: RoomDataProvider> TimelineInner<P> {
                     offset += 1;
                 }
             }
-        });
+        }
     }
 
     pub(super) async fn set_sender_profiles_pending(&self) {
