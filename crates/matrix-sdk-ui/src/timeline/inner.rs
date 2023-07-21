@@ -48,7 +48,6 @@ use ruma::{
     EventId, MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedTransactionId, OwnedUserId,
     TransactionId, UserId,
 };
-use tokio::sync::MutexGuard;
 use tracing::{debug, error, field::debug, info, instrument, trace, warn};
 #[cfg(feature = "e2e-encryption")]
 use tracing::{field, info_span, Instrument as _};
@@ -70,7 +69,10 @@ use super::{
     ReactionSenderData, RelativePosition, RepliedToEvent, TimelineDetails, TimelineItem,
     TimelineItemContent, TimelineItemKind,
 };
-use crate::{debug::DebugMutex, events::SyncTimelineEventWithoutContent};
+use crate::{
+    debug::{DebugMutex, DebugMutexGuard},
+    events::SyncTimelineEventWithoutContent,
+};
 
 #[derive(Clone, Debug)]
 pub(super) struct TimelineInner<P: RoomDataProvider = Room> {
@@ -1259,7 +1261,7 @@ impl TimelineInnerState {
 }
 
 async fn fetch_replied_to_event(
-    mut state: MutexGuard<'_, TimelineInnerState>,
+    mut state: DebugMutexGuard<'_, TimelineInnerState>,
     index: usize,
     item: &EventTimelineItem,
     message: &Message,
