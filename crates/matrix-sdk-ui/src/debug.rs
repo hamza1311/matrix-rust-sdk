@@ -18,7 +18,7 @@ impl<T> DebugMutex<T> {
     pub fn lock(&self) -> impl Future<Output = tokio::sync::MutexGuard<'_, T>> {
         let caller = Location::caller();
         async move {
-            let guard = match timeout(Duration::from_secs(1), self.inner.lock()).await {
+            let guard = match timeout(Duration::from_millis(50), self.inner.lock()).await {
                 Ok(g) => g,
                 Err(_) => {
                     if let Some(location) = &*self.last_locked_from.lock().unwrap() {
