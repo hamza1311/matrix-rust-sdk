@@ -354,11 +354,13 @@ impl Room {
             let mutex = Arc::new(Mutex::new(()));
             map.insert(self.inner.room_id().to_owned(), mutex.clone());
 
-            let _guard = mutex.lock().await;
+            let guard = mutex.lock().await;
             drop(map);
 
             let request = get_member_events::v3::Request::new(self.inner.room_id().to_owned());
             let response = self.client.send(request, None).await?;
+
+            drop(guard);
 
             let response = Box::pin(
                 self.client.base_client().receive_members(self.inner.room_id(), &response),
