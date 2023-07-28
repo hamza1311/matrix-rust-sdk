@@ -65,8 +65,7 @@ use zeroize::Zeroize;
 use crate::{
     gossiping::GossippedSecret,
     identities::{
-        user::{OwnUserIdentity, UserIdentities, UserIdentity},
-        Device, ReadOnlyDevice, ReadOnlyUserIdentities, UserDevices,
+        user::UserIdentities, Device, ReadOnlyDevice, ReadOnlyUserIdentities, UserDevices,
     },
     olm::{
         InboundGroupSession, OlmMessageHash, OutboundGroupSession, PrivateCrossSigningIdentity,
@@ -75,7 +74,7 @@ use crate::{
     types::{events::room_key_withheld::RoomKeyWithheldEvent, EventEncryptionAlgorithm},
     utilities::encode,
     verification::VerificationMachine,
-    CrossSigningStatus,
+    CrossSigningStatus, ReadOnlyOwnUserIdentity,
 };
 
 pub mod caches;
@@ -137,6 +136,10 @@ struct StoreInner {
     /// The sender side of a broadcast channel which sends out secrets we
     /// received as a `m.secret.send` event.
     secrets_broadcaster: broadcast::Sender<GossippedSecret>,
+
+    devices_sender: broadcast::Sender<DeviceUpdates>,
+
+    user_identities_sender: broadcast::Sender<IdentityUpdates>,
 }
 
 /// Aggregated changes to be saved in the database.
@@ -214,6 +217,55 @@ pub struct DeviceChanges {
     pub new: Vec<ReadOnlyDevice>,
     pub changed: Vec<ReadOnlyDevice>,
     pub deleted: Vec<ReadOnlyDevice>,
+}
+
+/// Updates about [`Device`]s which got received over the `/keys/query`
+/// endpoint.
+#[derive(Clone, Debug, Default)]
+pub struct DeviceUpdates {
+    /// The list of newly discovered devices.
+    ///
+    /// A device being in this list does not necessarily mean that the device
+    /// was just created, it just means that it's the first time we're
+    /// seeing this device.
+    pub new: BTreeMap<OwnedUserId, BTreeMap<OwnedDeviceId, Device>>,
+    /// The list of changed devices.
+    pub changed: BTreeMap<OwnedUserId, BTreeMap<OwnedDeviceId, Device>>,
+}
+
+impl DeviceUpdates {
+    fn is_empty(&self) -> bool {
+        self.new.is_empty() && self.changed.is_empty()
+    }
+}
+
+/// Updates about [`UserIdentities`] which got received over the `/keys/query`
+/// endpoint.
+#[derive(Clone, Debug, Default)]
+pub struct IdentityUpdates {
+    /// The list of newly discovered user identities .
+    ///
+    /// A identity being in this list does not necessarily mean that the
+    /// identity was just created, it just means that it's the first time
+    /// we're seeing this identity.
+    pub new: BTreeMap<OwnedUserId, UserIdentities>,
+    /// The list of changed identities.
+    pub changed: BTreeMap<OwnedUserId, UserIdentities>,
+}
+
+impl IdentityUpdates {
+    fn is_empty(&self) -> bool {
+        self.new.is_empty() && self.changed.is_empty()
+    }
+
+    fn get_inner(&self, user_id: &UserId) -> Option<ReadOnlyUserIdentities> {
+        self.new.get(user_id).or_else(|| self.changed.get(user_id)).cloned().map(|identity| {
+            match identity {
+                UserIdentities::Own(i) => i.inner.into(),
+                UserIdentities::Other(i) => i.inner.into(),
+            }
+        })
+    }
 }
 
 /// The private part of a backup key.
@@ -403,6 +455,8 @@ impl Store {
     ) -> Self {
         let (room_keys_received_sender, _) = broadcast::channel(10);
         let (secrets_broadcaster, _) = broadcast::channel(10);
+        let (devices_sender, _) = broadcast::channel(10);
+        let (user_identities_sender, _) = broadcast::channel(10);
 
         let inner = Arc::new(StoreInner {
             user_id,
@@ -416,6 +470,8 @@ impl Store {
             tracked_user_loading_lock: Mutex::new(()),
             room_keys_received_sender,
             secrets_broadcaster,
+            devices_sender,
+            user_identities_sender,
         });
 
         Self { inner }
@@ -454,11 +510,109 @@ impl Store {
         self.save_changes(changes).await
     }
 
+    fn collect_device_updates(
+        &self,
+        own_identity: Option<ReadOnlyOwnUserIdentity>,
+        identities: &IdentityUpdates,
+        changes: &Changes,
+    ) -> DeviceUpdates {
+        let mut new: BTreeMap<_, BTreeMap<_, _>> = BTreeMap::new();
+        let mut changed: BTreeMap<_, BTreeMap<_, _>> = BTreeMap::new();
+
+        for device in &changes.devices.new {
+            let device = Device {
+                inner: device.to_owned(),
+                verification_machine: self.inner.verification_machine.to_owned(),
+                own_identity: own_identity.to_owned(),
+                device_owner_identity: identities.get_inner(device.user_id()),
+            };
+
+            new.entry(device.user_id().to_owned())
+                .or_default()
+                .insert(device.device_id().to_owned(), device);
+        }
+
+        for device in &changes.devices.changed {
+            let device = Device {
+                inner: device.to_owned(),
+                verification_machine: self.inner.verification_machine.to_owned(),
+                own_identity: own_identity.to_owned(),
+                device_owner_identity: identities.get_inner(device.user_id()),
+            };
+
+            changed
+                .entry(device.user_id().to_owned())
+                .or_default()
+                .insert(device.device_id().to_owned(), device.to_owned());
+        }
+
+        DeviceUpdates { new, changed }
+    }
+
+    async fn collect_identity_updates(
+        &self,
+        changes: &Changes,
+    ) -> Result<(Option<ReadOnlyOwnUserIdentity>, IdentityUpdates)> {
+        let mut new = BTreeMap::new();
+        let mut changed = BTreeMap::new();
+
+        for identity in &changes.identities.new {
+            new.insert(identity.user_id().to_owned(), identity.to_owned());
+        }
+
+        for identity in &changes.identities.changed {
+            changed.insert(identity.user_id().to_owned(), identity.to_owned());
+        }
+
+        let own_identity = if let Some(identity) = new.get(self.user_id()) {
+            identity.own().cloned()
+        } else if let Some(identity) = changed.get(self.user_id()) {
+            identity.own().cloned()
+        } else {
+            self.get_user_identity(self.user_id()).await?.map(|u| u.own().cloned()).flatten()
+        };
+
+        let new = new
+            .into_iter()
+            .map(|(user_id, identity)| {
+                (
+                    user_id,
+                    UserIdentities::new(
+                        identity,
+                        self.inner.verification_machine.to_owned(),
+                        own_identity.to_owned(),
+                    ),
+                )
+            })
+            .collect();
+
+        let changed = changed
+            .into_iter()
+            .map(|(user_id, identity)| {
+                (
+                    user_id,
+                    UserIdentities::new(
+                        identity,
+                        self.inner.verification_machine.to_owned(),
+                        own_identity.to_owned(),
+                    ),
+                )
+            })
+            .collect();
+
+        let updates = IdentityUpdates { new, changed };
+
+        Ok((own_identity, updates))
+    }
+
     pub(crate) async fn save_changes(&self, changes: Changes) -> Result<()> {
         let room_key_updates: Vec<_> =
             changes.inbound_group_sessions.iter().map(RoomKeyInfo::from).collect();
 
         let secrets = changes.secrets.to_owned();
+
+        let (own_identity, identities) = self.collect_identity_updates(&changes).await?;
+        let devices = self.collect_device_updates(own_identity, &identities, &changes);
 
         self.inner.store.save_changes(changes).await?;
 
@@ -469,6 +623,14 @@ impl Store {
 
         for secret in secrets {
             let _ = self.inner.secrets_broadcaster.send(secret);
+        }
+
+        if !identities.is_empty() {
+            let _ = self.inner.user_identities_sender.send(identities);
+        }
+
+        if !devices.is_empty() {
+            let _ = self.inner.devices_sender.send(devices);
         }
 
         Ok(())
@@ -634,35 +796,18 @@ impl Store {
 
     ///  Get the Identity of `user_id`
     pub(crate) async fn get_identity(&self, user_id: &UserId) -> Result<Option<UserIdentities>> {
-        // let own_identity =
-        // self.inner.get_user_identity(self.user_id()).await?.and_then(|i| i.own());
-        Ok(if let Some(identity) = self.inner.store.get_user_identity(user_id).await? {
-            Some(match identity {
-                ReadOnlyUserIdentities::Own(i) => OwnUserIdentity {
-                    inner: i,
-                    verification_machine: self.inner.verification_machine.clone(),
+        let own_identity =
+            self.inner.store.get_user_identity(self.user_id()).await?.and_then(|i| {
+                if let ReadOnlyUserIdentities::Own(i) = i {
+                    Some(i)
+                } else {
+                    None
                 }
-                .into(),
-                ReadOnlyUserIdentities::Other(i) => {
-                    let own_identity =
-                        self.inner.store.get_user_identity(self.user_id()).await?.and_then(|i| {
-                            if let ReadOnlyUserIdentities::Own(i) = i {
-                                Some(i)
-                            } else {
-                                None
-                            }
-                        });
-                    UserIdentity {
-                        inner: i,
-                        verification_machine: self.inner.verification_machine.clone(),
-                        own_identity,
-                    }
-                    .into()
-                }
-            })
-        } else {
-            None
-        })
+            });
+
+        Ok(self.inner.store.get_user_identity(user_id).await?.map(|i| {
+            UserIdentities::new(i, self.inner.verification_machine.to_owned(), own_identity)
+        }))
     }
 
     /// Try to export the secret with the given secret name.
@@ -1029,7 +1174,92 @@ impl Store {
             match result {
                 Ok(r) => Some(r),
                 Err(BroadcastStreamRecvError::Lagged(lag)) => {
-                    warn!("room_keys_received_stream missed {} updates", lag);
+                    warn!("room_keys_received_stream missed {lag} updates");
+                    None
+                }
+            }
+        })
+    }
+
+    /// Returns a stream of user identity updates, allowing users to listen for
+    /// notifications about new or changed user identities.
+    ///
+    /// The stream produced by this method emits updates whenever a new user
+    /// identity is discovered or when an existing identities information is
+    /// changed. Users can subscribe to this stream and receive updates in
+    /// real-time.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use matrix_sdk_crypto::OlmMachine;
+    /// # use ruma::{device_id, user_id};
+    /// # use futures_util::{pin_mut, StreamExt};
+    /// # let machine: OlmMachine = unimplemented!();
+    /// # futures_executor::block_on(async {
+    /// let identities_stream = machine.store().user_identities_stream();
+    /// pin_mut!(identities_stream);
+    ///
+    /// for identity_updates in identities_stream.next().await {
+    ///     for (_, identity) in identity_updates.new {
+    ///         println!("A new identity has been added {}", identity.user_id());
+    ///     }
+    /// }
+    /// # });
+    /// ```
+    pub fn user_identities_stream(&self) -> impl Stream<Item = IdentityUpdates> {
+        let stream = BroadcastStream::new(self.inner.user_identities_sender.subscribe());
+
+        // See the comment in the [`Store::room_keys_received_stream()`] on why we're
+        // ignoring the lagged error.
+        stream.filter_map(|result| async move {
+            match result {
+                Ok(r) => Some(r),
+                Err(BroadcastStreamRecvError::Lagged(lag)) => {
+                    warn!("user_identities_stream missed {lag} updates");
+                    None
+                }
+            }
+        })
+    }
+
+    /// Returns a stream of device updates, allowing users to listen for
+    /// notifications about new or changed devices.
+    ///
+    /// The stream produced by this method emits updates whenever a new device
+    /// is discovered or when an existing device's information is changed. Users
+    /// can subscribe to this stream and receive updates in real-time.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use matrix_sdk_crypto::OlmMachine;
+    /// # use ruma::{device_id, user_id};
+    /// # use futures_util::{pin_mut, StreamExt};
+    /// # let machine: OlmMachine = unimplemented!();
+    /// # futures_executor::block_on(async {
+    /// let devices_stream = machine.store().devices_stream();
+    /// pin_mut!(devices_stream);
+    ///
+    /// for device_updates in devices_stream.next().await {
+    ///     if let Some(user_devices) = device_updates.new.get(machine.user_id()) {
+    ///         for device in user_devices.values() {
+    ///             println!("A new device has been added {}", device.device_id());
+    ///         }
+    ///     }
+    /// }
+    /// # });
+    /// ```
+    pub fn devices_stream(&self) -> impl Stream<Item = DeviceUpdates> {
+        let stream = BroadcastStream::new(self.inner.devices_sender.subscribe());
+
+        // See the comment in the [`Store::room_keys_received_stream()`] on why we're
+        // ignoring the lagged error.
+        stream.filter_map(|result| async move {
+            match result {
+                Ok(r) => Some(r),
+                Err(BroadcastStreamRecvError::Lagged(lag)) => {
+                    warn!("devices_stream missed {lag} updates");
                     None
                 }
             }
