@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ops::Deref;
+use std::{collections::BTreeMap, ops::Deref};
 
 use matrix_sdk_base::crypto::{
     store::CryptoStoreError, Device as BaseDevice, LocalTrust, ReadOnlyDevice,
     UserDevices as BaseUserDevices,
 };
-use ruma::{events::key::verification::VerificationMethod, DeviceId};
+use ruma::{events::key::verification::VerificationMethod, DeviceId, OwnedDeviceId, OwnedUserId};
 
 use super::ManualVerifyError;
 use crate::{
@@ -26,6 +26,61 @@ use crate::{
     error::Result,
     Client,
 };
+
+/// Updates about [`Device`]s which got received over the `/keys/query`
+/// endpoint.
+#[derive(Clone, Debug, Default)]
+pub struct DeviceUpdates {
+    /// The list of newly discovered devices.
+    ///
+    /// A device being in this list does not necessarily mean that the device
+    /// was just created, it just means that it's the first time we're
+    /// seeing this device.
+    pub new: BTreeMap<OwnedUserId, BTreeMap<OwnedDeviceId, Device>>,
+    /// The list of changed devices.
+    pub changed: BTreeMap<OwnedUserId, BTreeMap<OwnedDeviceId, Device>>,
+}
+
+impl DeviceUpdates {
+    pub(crate) fn new(
+        client: Client,
+        updates: matrix_sdk_base::crypto::store::DeviceUpdates,
+    ) -> Self {
+        let new: BTreeMap<_, BTreeMap<_, _>> = updates
+            .new
+            .into_iter()
+            .map(|(user_id, devices)| {
+                (
+                    user_id,
+                    devices
+                        .into_iter()
+                        .map(|(device_id, device)| {
+                            (device_id, Device { inner: device, client: client.to_owned() })
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+
+        let changed: BTreeMap<_, BTreeMap<_, _>> = updates
+            .changed
+            .into_iter()
+            .map(|(user_id, devices)| {
+                (
+                    user_id,
+                    devices
+                        .into_iter()
+                        .map(|(device_id, device)| {
+                            (device_id, Device { inner: device, client: client.to_owned() })
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+
+        DeviceUpdates { new, changed }
+    }
+}
 
 /// A device represents a E2EE capable client or device of an user.
 ///
