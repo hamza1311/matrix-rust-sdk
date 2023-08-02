@@ -1218,6 +1218,7 @@ pub(crate) mod tests {
     }
 
     #[async_test]
+    #[cfg(not(target_arch = "wasm32"))]
     async fn devices_stream() {
         let manager = manager().await;
         let (request_id, _) = manager.build_key_query_for_users(vec![user_id()]);
@@ -1237,6 +1238,7 @@ pub(crate) mod tests {
     }
 
     #[async_test]
+    #[cfg(not(target_arch = "wasm32"))]
     async fn identities_stream() {
         let manager = manager().await;
         let (request_id, _) = manager.build_key_query_for_users(vec![user_id()]);

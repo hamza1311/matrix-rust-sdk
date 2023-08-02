@@ -1207,6 +1207,7 @@ impl Store {
     /// }
     /// # });
     /// ```
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn user_identities_stream(&self) -> impl Stream<Item = IdentityUpdates> {
         let stream = BroadcastStream::new(self.inner.user_identities_sender.subscribe());
 
@@ -1250,6 +1251,7 @@ impl Store {
     /// }
     /// # });
     /// ```
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn devices_stream(&self) -> impl Stream<Item = DeviceUpdates> {
         let stream = BroadcastStream::new(self.inner.devices_sender.subscribe());
 
