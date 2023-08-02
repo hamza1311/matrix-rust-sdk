@@ -696,6 +696,7 @@ impl Encryption {
     /// }
     /// # anyhow::Ok(()) };
     /// ```
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn devices_stream(&self) -> Result<impl Stream<Item = DeviceUpdates>> {
         let olm = self.client.olm_machine().await;
         let olm = olm.as_ref().ok_or(Error::NoOlmMachine)?;
@@ -734,6 +735,7 @@ impl Encryption {
     /// }
     /// # anyhow::Ok(()) };
     /// ```
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn user_identities_stream(&self) -> Result<impl Stream<Item = IdentityUpdates>> {
         let olm = self.client.olm_machine().await;
         let olm = olm.as_ref().ok_or(Error::NoOlmMachine)?;

@@ -42,6 +42,7 @@ pub struct DeviceUpdates {
 }
 
 impl DeviceUpdates {
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn new(
         client: Client,
         updates: matrix_sdk_base::crypto::store::DeviceUpdates,

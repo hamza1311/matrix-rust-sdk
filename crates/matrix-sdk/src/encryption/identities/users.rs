@@ -47,6 +47,7 @@ pub struct IdentityUpdates {
 }
 
 impl IdentityUpdates {
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn new(
         client: Client,
         updates: matrix_sdk_base::crypto::store::IdentityUpdates,
@@ -106,6 +107,7 @@ pub struct UserIdentity {
 }
 
 impl UserIdentity {
+    #[cfg(not(target_arch = "wasm32"))]
     fn new(client: Client, identity: InnerUserIdentities) -> Self {
         match identity {
             InnerUserIdentities::Own(i) => Self::new_own(client, i),
