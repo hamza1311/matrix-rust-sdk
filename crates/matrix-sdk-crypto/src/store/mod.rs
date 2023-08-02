@@ -569,7 +569,7 @@ impl Store {
         } else if let Some(identity) = changed.get(self.user_id()) {
             identity.own().cloned()
         } else {
-            self.get_user_identity(self.user_id()).await?.map(|u| u.own().cloned()).flatten()
+            self.get_user_identity(self.user_id()).await?.and_then(|u| u.own().cloned())
         };
 
         let new = new
