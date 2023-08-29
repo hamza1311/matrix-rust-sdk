@@ -1,13 +1,12 @@
 //! Types and traits related to the permissions that a widget can request from a
 //! client.
 
-use async_trait::async_trait;
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt;
 
-use super::filter::{
-    EventFilter::{self, MessageLike, State},
-    FilterScope,
-};
+use async_trait::async_trait;
+use serde::{ser::SerializeSeq, Deserialize, Deserializer, Serialize, Serializer};
+
+use super::filter::{EventFilter, MessageLikeEventFilter, StateEventFilter};
 
 const SEND_EVENT: &str = "org.matrix.msc2762.m.send.event";
 const READ_EVENT: &str = "org.matrix.msc2762.m.receive.event";
@@ -38,35 +37,74 @@ pub struct Permissions {
     pub requires_client: bool,
 }
 
+struct PrintEventFilter<'a>(&'a EventFilter);
+
+impl fmt::Display for PrintEventFilter<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            EventFilter::MessageLike(filter) => PrintMessageLikeEventFilter(filter).fmt(f),
+            EventFilter::State(filter) => PrintStateEventFilter(filter).fmt(f),
+        }
+    }
+}
+
+struct PrintMessageLikeEventFilter<'a>(&'a MessageLikeEventFilter);
+
+impl fmt::Display for PrintMessageLikeEventFilter<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            MessageLikeEventFilter::WithType(event_type) => {
+                // TODO: escape `#` as `\#` and `\` as `\\` in event_type
+                write!(f, "{event_type}")
+            }
+            MessageLikeEventFilter::RoomMessageWithMsgtype(msgtype) => {
+                write!(f, "m.room.message#{msgtype}")
+            }
+        }
+    }
+}
+
+struct PrintStateEventFilter<'a>(&'a StateEventFilter);
+
+impl fmt::Display for PrintStateEventFilter<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // TODO: escape `#` as `\#` and `\` as `\\` in event_type
+        match self.0 {
+            StateEventFilter::WithType(event_type) => write!(f, "{event_type}"),
+            StateEventFilter::WithTypeAndStateKey(event_type, state_key) => {
+                write!(f, "{event_type}#{state_key}")
+            }
+        }
+    }
+}
+
 impl Serialize for Permissions {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let mut capability_list: Vec<String> = vec![];
-        let caps = vec![self.requires_client];
-        let strs = vec![REQUIRES_CLIENT];
+        let seq_len = self.requires_client as usize + self.read.len() + self.send.len();
+        let mut seq = serializer.serialize_seq(Some(seq_len))?;
 
-        caps.iter()
-            .zip(strs.iter())
-            .filter(|(c, _)| **c)
-            .for_each(|(_, s)| capability_list.push((*s).to_owned()));
-
-        let send = self.send.clone().into_iter().map(|filter| match filter {
-            State(scope) => (SEND_STATE, scope.get_ext()),
-            MessageLike(scope) => (SEND_EVENT, scope.get_ext()),
-        });
-
-        let read = self.read.clone().into_iter().map(|f| match f {
-            State(scope) => (READ_STATE, scope.get_ext()),
-            MessageLike(scope) => (READ_EVENT, scope.get_ext()),
-        });
-
-        for (base, ext) in send.chain(read) {
-            capability_list.push(format!("{}{}", base, ext));
+        if self.requires_client {
+            seq.serialize_element(REQUIRES_CLIENT)?;
+        }
+        for filter in &self.read {
+            let name = match filter {
+                EventFilter::MessageLike(_) => READ_EVENT,
+                EventFilter::State(_) => READ_STATE,
+            };
+            seq.serialize_element(&format!("{name}:{}", PrintEventFilter(filter)))?;
+        }
+        for filter in &self.send {
+            let name = match filter {
+                EventFilter::MessageLike(_) => SEND_EVENT,
+                EventFilter::State(_) => SEND_STATE,
+            };
+            seq.serialize_element(&format!("{name}:{}", PrintEventFilter(filter)))?;
         }
 
-        capability_list.serialize(serializer)
+        seq.end()
     }
 }
 
@@ -75,33 +113,67 @@ impl<'de> Deserialize<'de> for Permissions {
     where
         D: Deserializer<'de>,
     {
-        let capability_list = Vec::<String>::deserialize(deserializer)?;
+        enum Permission {
+            RequiresClient,
+            Read(EventFilter),
+            Send(EventFilter),
+            Unknown,
+        }
+
+        impl<'de> Deserialize<'de> for Permission {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                let s = ruma::serde::deserialize_cow_str(deserializer)?;
+                if s == REQUIRES_CLIENT {
+                    return Ok(Self::RequiresClient);
+                }
+
+                match s.split_once(':') {
+                    Some((READ_EVENT, filter_s)) => Ok(Permission::Read(EventFilter::MessageLike(
+                        parse_message_event_filter(filter_s),
+                    ))),
+                    Some((SEND_EVENT, filter_s)) => Ok(Permission::Send(EventFilter::MessageLike(
+                        parse_message_event_filter(filter_s),
+                    ))),
+                    Some((READ_STATE, filter_s)) => {
+                        Ok(Permission::Read(EventFilter::State(parse_state_event_filter(filter_s))))
+                    }
+                    Some((SEND_STATE, filter_s)) => {
+                        Ok(Permission::Send(EventFilter::State(parse_state_event_filter(filter_s))))
+                    }
+                    _ => Ok(Self::Unknown),
+                }
+            }
+        }
+
+        fn parse_message_event_filter(s: &str) -> MessageLikeEventFilter {
+            match s.strip_prefix("m.room.message#") {
+                Some(msgtype) => MessageLikeEventFilter::RoomMessageWithMsgtype(msgtype.to_owned()),
+                // TODO: Replace `\\` by `\` and `\#` by `#`, enforce no unescaped `#`
+                None => MessageLikeEventFilter::WithType(s.into()),
+            }
+        }
+
+        fn parse_state_event_filter(s: &str) -> StateEventFilter {
+            // TODO: Search for un-escaped `#` only, replace `\\` by `\` and `\#` by `#`
+            match s.split_once('#') {
+                Some((event_type, state_key)) => {
+                    StateEventFilter::WithTypeAndStateKey(event_type.into(), state_key.to_owned())
+                }
+                None => StateEventFilter::WithType(s.into()),
+            }
+        }
+
         let mut permissions = Permissions::default();
-
-        let err_m = |e: serde_json::Error| de::Error::custom(e.to_string());
-
-        for capability in capability_list {
-            match &capability.split(":").collect::<Vec<_>>().as_slice() {
-                [REQUIRES_CLIENT] => permissions.requires_client = true,
-
-                [SEND_EVENT] => permissions.send.push(MessageLike(FilterScope::All)),
-                [READ_EVENT] => permissions.read.push(MessageLike(FilterScope::All)),
-                [SEND_EVENT, rest] => {
-                    permissions.send.push(MessageLike(FilterScope::from_ext(rest).map_err(err_m)?))
-                }
-                [READ_EVENT, rest] => {
-                    permissions.read.push(MessageLike(FilterScope::from_ext(rest).map_err(err_m)?))
-                }
-
-                [SEND_STATE] => permissions.send.push(State(FilterScope::All)),
-                [READ_STATE] => permissions.read.push(State(FilterScope::All)),
-                [SEND_STATE, rest] => {
-                    permissions.send.push(State(FilterScope::from_ext(rest).map_err(err_m)?))
-                }
-                [READ_STATE, rest] => {
-                    permissions.read.push(State(FilterScope::from_ext(rest).map_err(err_m)?))
-                }
-                _ => {}
+        for permission in Vec::<Permission>::deserialize(deserializer)? {
+            match permission {
+                Permission::RequiresClient => permissions.requires_client = true,
+                Permission::Read(filter) => permissions.read.push(filter),
+                Permission::Send(filter) => permissions.send.push(filter),
+                // ignore unknown permissions
+                Permission::Unknown => {}
             }
         }
 

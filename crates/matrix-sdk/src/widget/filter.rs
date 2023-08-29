@@ -1,141 +1,79 @@
 use ruma::events::{MessageLikeEventType, StateEventType, TimelineEventType};
-use serde::{de::Error, Deserialize};
-use tracing::warn;
+use serde::Deserialize;
 
 use super::messages::from_widget::SendEventRequest;
 
-/// Different kinds of filter that could be applied to the timeline events.
-#[derive(Debug, Clone)]
+/// Different kinds of filters for timeline events.
+#[derive(Clone, Debug)]
 pub enum EventFilter {
-    /// Message-like events.
-    MessageLike(FilterScope<MessageFilterDescriptor>),
-    /// State events.
-    State(FilterScope<StateFilterDescriptor>),
+    /// Filter for message-like events.
+    MessageLike(MessageLikeEventFilter),
+    /// Filter for state events.
+    State(StateEventFilter),
 }
+
 impl EventFilter {
     pub(super) fn matches(&self, matrix_event: &MatrixEventFilterInput) -> bool {
-        match (self, &matrix_event.state_key) {
-            // message-like filter, message-like event
-            (EventFilter::MessageLike(message_filter), None) => match message_filter {
-                FilterScope::All => true,
-                FilterScope::Custom(filter) => {
-                    if matrix_event.event_type != TimelineEventType::from(filter.event_type.clone())
-                    {
-                        return false;
-                    }
-
-                    if filter.event_type != MessageLikeEventType::RoomMessage {
-                        if filter.msgtype.is_some() {
-                            warn!(
-                                "Invalid filter: msgtype specified for a non-room-message filter"
-                            );
-                            return false;
-                        }
-                        return true;
-                    }
-
-                    match (filter.msgtype.clone(), matrix_event.content.msgtype.clone()) {
-                        (Some(a), Some(b)) => a == b,
-                        (Some(_), None) => false,
-                        (None, Some(_)) | (None, None) => true,
-                    }
-                }
-            },
-
-            // state filter, state event
-            (EventFilter::State(state_filter), Some(state_key)) => match state_filter {
-                FilterScope::All => true,
-                FilterScope::Custom(filter) => {
-                    matrix_event.event_type == TimelineEventType::from(filter.event_type.clone())
-                        && filter
-                            .state_key
-                            .as_ref()
-                            .map_or(true, |filter_state_key| filter_state_key == state_key)
-                }
-            },
-
-            // something else
-            _ => false,
+        match self {
+            EventFilter::MessageLike(message_filter) => message_filter.matches(matrix_event),
+            EventFilter::State(state_filter) => state_filter.matches(matrix_event),
         }
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum FilterScope<T: FilterDescriptor> {
-    All,
-    Custom(T),
+/// Filter for message-like events.
+#[derive(Clone, Debug)]
+pub enum MessageLikeEventFilter {
+    /// Matches message-like events with the given `type`.
+    WithType(MessageLikeEventType),
+    /// Matches `m.room.message` events with the given `msgtype`.
+    RoomMessageWithMsgtype(String),
 }
-impl<T: FilterDescriptor> FilterScope<T> {
-    /// Convert a `FilterScope` into an extension string.
-    /// Example:
-    /// ```
-    /// FilterScope::Custom(
-    ///     StateFilterDescriptor{
-    ///         event_type:"m.room.member",
-    ///         state_key: Some("@username:server.domain")
-    ///     }
-    /// )
-    /// ```
-    /// has the extension `m.room.member#@username:server.domain`
-    pub(crate) fn get_ext(&self) -> String {
+
+impl MessageLikeEventFilter {
+    fn matches(&self, matrix_event: &MatrixEventFilterInput) -> bool {
+        if matrix_event.state_key.is_some() {
+            // State event doesn't match a message-like event filter.
+            return false;
+        }
+
         match self {
-            FilterScope::All => "".to_owned(),
-            FilterScope::Custom(descriptor) => {
-                let (p, s) = descriptor.get_prefix_suffix();
-                let s = s.map(|s| format!("#{}", s)).unwrap_or("".to_owned());
-                format!("{}{}", p, s)
+            MessageLikeEventFilter::WithType(event_type) => {
+                matrix_event.event_type == TimelineEventType::from(event_type.clone())
+            }
+            MessageLikeEventFilter::RoomMessageWithMsgtype(msgtype) => {
+                matrix_event.event_type == TimelineEventType::RoomMessage
+                    && matrix_event.content.msgtype.as_ref() == Some(msgtype)
             }
         }
     }
+}
 
-    /// Creates a `FilterScope` from an extension string.
-    /// Example:
-    /// `org.matrix.msc2762.m.send.event:m.room.message#m.text` has the extension `m.room.message#m.text`
-    pub(crate) fn from_ext(ext: &str) -> Result<Self, serde_json::Error> {
-        match ext.clone().split("#").collect::<Vec<_>>().as_slice() {
-            [""] => Ok(FilterScope::All),
-            [perfix] => Ok(FilterScope::Custom(T::from_prefix_suffix((*perfix).to_owned(), None))),
-            [perfix, suffix] => Ok(FilterScope::Custom(T::from_prefix_suffix(
-                (*perfix).to_owned(),
-                Some((*suffix).to_owned()),
-            ))),
-            _ => Err(serde_json::Error::custom("could not parse capability")),
+/// Filter for state events.
+#[derive(Clone, Debug)]
+pub enum StateEventFilter {
+    /// Matches state events with the given `type`, regardless of `state_key`.
+    WithType(StateEventType),
+    /// Matches state events with the given `type` and `state_key`.
+    WithTypeAndStateKey(StateEventType, String),
+}
+
+impl StateEventFilter {
+    fn matches(&self, matrix_event: &MatrixEventFilterInput) -> bool {
+        let Some(state_key) = &matrix_event.state_key else {
+            // Message-like event doesn't match a state event filter.
+            return false;
+        };
+
+        match self {
+            StateEventFilter::WithType(event_type) => {
+                matrix_event.event_type == TimelineEventType::from(event_type.clone())
+            }
+            StateEventFilter::WithTypeAndStateKey(event_type, filter_state_key) => {
+                matrix_event.event_type == TimelineEventType::from(event_type.clone())
+                    && state_key == filter_state_key
+            }
         }
-    }
-}
-pub trait FilterDescriptor {
-    fn get_prefix_suffix(&self) ->  (String, Option<String>);
-    fn from_prefix_suffix(prefix: String, suffix: Option<String>) -> Self;
-}
-#[derive(Debug, Clone)]
-pub struct StateFilterDescriptor {
-    /// The type of the state event.
-    event_type: StateEventType,
-    /// State key that could be `None`, `None` means "any state key".
-    state_key: Option<String>,
-}
-impl FilterDescriptor for StateFilterDescriptor {
-    fn get_prefix_suffix(&self) -> (String, Option<String>) {
-        (self.event_type.to_string(), self.state_key.as_ref().map(|s|s.clone()))
-    }
-    fn from_prefix_suffix(prefix: String, suffix: Option<String>) -> Self {
-        StateFilterDescriptor { event_type: prefix.into(), state_key: suffix }
-    }
-}
-#[derive(Debug, Clone)]
-pub struct MessageFilterDescriptor {
-    /// The type of the message-like event.
-    event_type: MessageLikeEventType,
-    /// Additional filter for the msgtype, currently only used for
-    /// `m.room.message`. `None` means "any msgtype"
-    msgtype: Option<String>,
-}
-impl FilterDescriptor for MessageFilterDescriptor {
-    fn get_prefix_suffix(&self) ->  (String, Option<String>) {
-        (self.event_type.to_string(), self.msgtype.as_ref().map(|s|s.clone()))
-    }
-    fn from_prefix_suffix(prefix: String, suffix: Option<String>) -> Self {
-        MessageFilterDescriptor { event_type: prefix.into(), msgtype: suffix }
     }
 }
 

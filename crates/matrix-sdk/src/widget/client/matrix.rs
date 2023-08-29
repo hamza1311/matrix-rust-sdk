@@ -14,7 +14,7 @@ use crate::{
     event_handler::EventHandlerDropGuard,
     room::{MessagesOptions, Room},
     widget::{
-        filter::{MatrixEventFilterInput, EventFilter},
+        filter::{EventFilter, MatrixEventFilterInput},
         messages::{
             from_widget::{
                 ReadEventRequest, ReadEventResponse, SendEventRequest, SendEventResponse,
