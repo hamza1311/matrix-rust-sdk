@@ -39,7 +39,7 @@ impl Request<Empty> {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Response<Req, Resp> {
-    #[serde(rename = "data")]
+    #[serde(flatten)]
     pub request: Request<Req>,
     pub response: ResponseBody<Resp>,
 }

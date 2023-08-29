@@ -9,10 +9,10 @@ use super::filter::{
     FilterScope,
 };
 
-const SEND_EVENT: &str = "org.matrix.msc2762.m.send.event";
-const READ_EVENT: &str = "org.matrix.msc2762.m.receive.event";
-const SEND_STATE: &str = "org.matrix.msc2762.m.send.state_event";
-const READ_STATE: &str = "org.matrix.msc2762.m.receive.state_event";
+const SEND_EVENT: &str = "org.matrix.msc2762.send.event";
+const READ_EVENT: &str = "org.matrix.msc2762.receive.event";
+const SEND_STATE: &str = "org.matrix.msc2762.send.state_event";
+const READ_STATE: &str = "org.matrix.msc2762.receive.state_event";
 const REQUIRES_CLIENT: &str = "io.element.requires_client";
 
 /// Must be implemented by a component that provides functionality of deciding
