@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(untagged)]
 pub enum Kind<Req, Resp> {
-    Request(Request<Req>),
     Response(Response<Req, Resp>),
+    Request(Request<Req>),
 }
 
 impl<T> Kind<Empty, T> {
