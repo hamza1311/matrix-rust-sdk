@@ -15,9 +15,9 @@ pub enum Action {
     ContentLoaded(MessageKind<Empty, Empty>),
     #[serde(rename = "get_openid")]
     GetOpenId(MessageKind<OpenIdRequest, OpenIdResponse>),
-    #[serde(rename = "send_events")]
+    #[serde(rename = "send_event")]
     SendEvent(MessageKind<SendEventRequest, SendEventResponse>),
-    #[serde(rename = "org.matrix.msc2876.read_events")]
+    #[serde(rename = "read_events")]
     ReadEvent(MessageKind<ReadEventRequest, ReadEventResponse>),
 }
 
