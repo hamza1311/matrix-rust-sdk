@@ -13,7 +13,7 @@ use crate::widget::{
     Permissions, PermissionsProvider,
 };
 
-pub(crate) struct State<T> {
+pub(super) struct State<T> {
     capabilities: Option<Capabilities>,
     widget: Arc<WidgetProxy>,
     client: MatrixDriver<T>,
@@ -26,16 +26,16 @@ pub(crate) enum Task {
 
 #[derive(Debug, Clone)]
 pub(crate) struct IncomingRequest {
-    pub header: Header,
-    pub action: Action,
+    pub(crate) header: Header,
+    pub(crate) action: Action,
 }
 
 impl<T: PermissionsProvider> State<T> {
-    pub(crate) fn new(widget: Arc<WidgetProxy>, client: MatrixDriver<T>) -> Self {
+    pub(super) fn new(widget: Arc<WidgetProxy>, client: MatrixDriver<T>) -> Self {
         Self { capabilities: None, widget, client }
     }
 
-    pub async fn listen(mut self, mut rx: UnboundedReceiver<Task>) {
+    pub(super) async fn listen(mut self, mut rx: UnboundedReceiver<Task>) {
         while let Some(msg) = rx.recv().await {
             match msg {
                 Task::HandleIncoming(req) => {
@@ -167,7 +167,7 @@ impl<T: PermissionsProvider> State<T> {
 }
 
 impl SupportedApiVersionsResponse {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             versions: vec![
                 ApiVersion::V0_0_1,

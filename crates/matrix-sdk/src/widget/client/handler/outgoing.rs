@@ -3,9 +3,9 @@ use crate::widget::messages::{
     Empty, MessageKind as Kind, OpenIdResponse,
 };
 
-pub type Response<T> = Result<T, String>;
+pub(crate) type Response<T> = Result<T, String>;
 
-pub trait Request: Sized + Send + Sync + 'static {
+pub(crate) trait Request: Sized + Send + Sync + 'static {
     type Response;
 
     // TODO: Nothing stops the implementor to to generate an `Action` that is
@@ -21,7 +21,7 @@ pub trait Request: Sized + Send + Sync + 'static {
     fn extract_response(reply: Action) -> Option<Response<Self::Response>>;
 }
 
-pub struct CapabilitiesRequest;
+pub(crate) struct CapabilitiesRequest;
 impl Request for CapabilitiesRequest {
     type Response = CapabilitiesResponse;
 
@@ -37,7 +37,7 @@ impl Request for CapabilitiesRequest {
     }
 }
 
-pub struct CapabilitiesUpdate(pub CapabilitiesUpdatedRequest);
+pub(crate) struct CapabilitiesUpdate(pub(crate) CapabilitiesUpdatedRequest);
 impl Request for CapabilitiesUpdate {
     type Response = Empty;
 
@@ -53,7 +53,7 @@ impl Request for CapabilitiesUpdate {
     }
 }
 
-pub struct OpenIdUpdated(pub OpenIdResponse);
+pub(crate) struct OpenIdUpdated(pub(crate) OpenIdResponse);
 impl Request for OpenIdUpdated {
     type Response = Empty;
 

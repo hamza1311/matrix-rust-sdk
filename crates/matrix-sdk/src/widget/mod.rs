@@ -4,17 +4,18 @@
 
 use async_channel::{Receiver, Sender};
 
-pub use self::{
-    client::{run as client_widget_api, MatrixDriver, Result},
-    filter::EventFilter,
-    permissions::{Permissions, PermissionsProvider},
-};
+use self::client::{run as client_widget_api, MatrixDriver, Result};
 use crate::room::Room;
 
 mod client;
 mod filter;
 mod messages;
 mod permissions;
+
+pub use self::{
+    filter::EventFilter,
+    permissions::{Permissions, PermissionsProvider},
+};
 
 /// Describes a widget.
 #[derive(Debug)]

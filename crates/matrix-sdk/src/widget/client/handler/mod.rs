@@ -5,13 +5,13 @@ use tokio::sync::{
     oneshot::Receiver,
 };
 
-pub(crate) use self::state::IncomingRequest;
 use self::state::{State, Task as StateTask};
-pub use self::{
+pub(crate) use self::{
     capabilities::Capabilities,
     error::{Error, Result},
     openid::{OpenIdDecision, OpenIdStatus},
     outgoing::{Request as Outgoing, Response},
+    state::IncomingRequest,
 };
 use super::{MatrixDriver, WidgetProxy};
 use crate::widget::{
@@ -24,11 +24,12 @@ use crate::widget::{
 
 mod capabilities;
 mod error;
+mod openid;
 mod outgoing;
 mod state;
 
 #[allow(missing_debug_implementations)]
-pub struct MessageHandler {
+pub(crate) struct MessageHandler {
     state_tx: UnboundedSender<StateTask>,
     widget: Arc<WidgetProxy>,
 }
@@ -70,35 +71,9 @@ impl MessageHandler {
     }
 }
 
-pub struct Reply {
-    pub header: Header,
+pub(crate) struct Reply {
+    pub(crate) header: Header,
     // TODO: Define a new type, so that we can guarantee on compile time that we can only send
     // `Action(Kind::Response)` here and not `Action(Kind::Request)`.
-    pub action: Action,
-}
-
-mod openid {
-    use super::{OpenIdResponse, OpenIdState, Receiver};
-
-    #[derive(Debug)]
-    pub enum OpenIdStatus {
-        #[allow(dead_code)]
-        Resolved(OpenIdDecision),
-        Pending(Receiver<OpenIdDecision>),
-    }
-
-    #[derive(Debug, Clone)]
-    pub enum OpenIdDecision {
-        Blocked,
-        Allowed(OpenIdState),
-    }
-
-    impl From<OpenIdDecision> for OpenIdResponse {
-        fn from(decision: OpenIdDecision) -> Self {
-            match decision {
-                OpenIdDecision::Allowed(resolved) => OpenIdResponse::Allowed(resolved),
-                OpenIdDecision::Blocked => OpenIdResponse::Blocked,
-            }
-        }
-    }
+    pub(crate) action: Action,
 }

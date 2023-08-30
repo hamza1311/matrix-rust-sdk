@@ -14,7 +14,7 @@ use crate::{
     event_handler::EventHandlerDropGuard,
     room::{MessagesOptions, Room},
     widget::{
-        filter::{MatrixEventFilterInput, EventFilter},
+        filter::{EventFilter, MatrixEventFilterInput},
         messages::{
             from_widget::{
                 ReadEventRequest, ReadEventResponse, SendEventRequest, SendEventResponse,
@@ -26,7 +26,7 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct Driver<T> {
+pub(crate) struct Driver<T> {
     /// The room this driver is attached to.
     ///
     /// Expected to be a room the user is a member of (not a room in invited or
@@ -37,7 +37,7 @@ pub struct Driver<T> {
 }
 
 impl<T> Driver<T> {
-    pub fn new(room: Room, permissions_provider: T) -> Self {
+    pub(crate) fn new(room: Room, permissions_provider: T) -> Self {
         Self { room, permissions_provider, event_handler_handle: None }
     }
 

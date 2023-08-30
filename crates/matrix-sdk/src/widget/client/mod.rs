@@ -1,5 +1,7 @@
 //! Client widget API implementation.
 
+#![warn(unreachable_pub)]
+
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -12,7 +14,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use self::handler::{IncomingRequest, MessageHandler, Outgoing, Reply, Response};
-pub use self::{
+pub(crate) use self::{
     handler::{Error, Result},
     matrix::Driver as MatrixDriver,
 };
@@ -27,7 +29,10 @@ mod matrix;
 /// Runs the client widget API handler for a given widget with a provided
 /// `client`. Returns once the widget is disconnected or some terminal error
 /// occurs.
-pub async fn run<T: PermissionsProvider>(client: MatrixDriver<T>, widget: Widget) -> Result<()> {
+pub(super) async fn run<T: PermissionsProvider>(
+    client: MatrixDriver<T>,
+    widget: Widget,
+) -> Result<()> {
     // A map of outgoing requests that we are waiting a response for, i.e. a
     // requests that we sent to the widget and that we're expecting an answer
     // from.
