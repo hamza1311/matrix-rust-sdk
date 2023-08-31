@@ -1735,8 +1735,7 @@ dependencies = [
 [[package]]
 name = "eyeball-im"
 version = "0.2.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d999ff633cd7243e8b9efc2a1e35846517f16ce4c3c87a70e0a829d8fb29af3"
+source = "git+https://github.com/jplatte/eyeball?branch=🦉#67ec30dde90e529519186ea368315e2ace859fed"
 dependencies = [
  "futures-core",
  "imbl",
@@ -1748,8 +1747,7 @@ dependencies = [
 [[package]]
 name = "eyeball-im-util"
 version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a51602d13a284f2241af1d8dc020dd22f49a6bbbf420a5eccbea6c399069a45"
+source = "git+https://github.com/jplatte/eyeball?branch=🦉#67ec30dde90e529519186ea368315e2ace859fed"
 dependencies = [
  "eyeball-im",
  "futures-core",

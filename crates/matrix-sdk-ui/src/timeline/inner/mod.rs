@@ -18,7 +18,7 @@ use std::{fmt, sync::Arc};
 
 use async_rx::StreamExt as _;
 use eyeball_im::{ObservableVectorEntry, VectorDiff, VectorSubscriber};
-use eyeball_im_util::{FilterMapVectorSubscriber, VectorExt};
+use eyeball_im_util::{vector, VectorExt};
 use futures_core::Stream;
 use imbl::Vector;
 use itertools::Itertools;
@@ -166,7 +166,7 @@ impl<P: RoomDataProvider> TimelineInner<P> {
     pub(super) async fn subscribe_filter_map<U, F>(
         &self,
         f: F,
-    ) -> (Vector<U>, FilterMapVectorSubscriber<Arc<TimelineItem>, F>)
+    ) -> (Vector<U>, vector::FilterMap<VectorSubscriber<Arc<TimelineItem>>, F>)
     where
         U: Clone,
         F: Fn(Arc<TimelineItem>) -> Option<U>,

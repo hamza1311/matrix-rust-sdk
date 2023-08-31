@@ -13,8 +13,8 @@ use std::{
 };
 
 use eyeball::Observable;
-use eyeball_im::{ObservableVector, VectorDiff};
-use eyeball_im_util::{FilterVectorSubscriber, VectorExt};
+use eyeball_im::{ObservableVector, VectorDiff, VectorSubscriber};
+use eyeball_im_util::{vector, VectorExt};
 use futures_core::Stream;
 use imbl::Vector;
 use ruma::{api::client::sync::sync_events::v4, assign, OwnedRoomId, TransactionId};
@@ -165,7 +165,7 @@ impl SlidingSyncList {
     pub fn room_list_filtered_stream<F>(
         &self,
         filter: F,
-    ) -> (Vector<RoomListEntry>, FilterVectorSubscriber<RoomListEntry, F>)
+    ) -> (Vector<RoomListEntry>, vector::Filter<VectorSubscriber<RoomListEntry>, F>)
     where
         F: Fn(&RoomListEntry) -> bool,
     {
