@@ -53,7 +53,7 @@ async fn back_pagination() {
 
     let room = client.get_room(room_id).unwrap();
     let timeline = Arc::new(room.timeline().await);
-    let (_, mut timeline_stream) = timeline.subscribe().await;
+    let (_, mut timeline_stream) = timeline.subscribe_flat().await;
     let mut back_pagination_status = timeline.back_pagination_status();
 
     Mock::given(method("GET"))
@@ -159,7 +159,7 @@ async fn back_pagination_highlighted() {
 
     let room = client.get_room(room_id).unwrap();
     let timeline = Arc::new(room.timeline().await);
-    let (_, mut timeline_stream) = timeline.subscribe().await;
+    let (_, mut timeline_stream) = timeline.subscribe_flat().await;
 
     let response_json = json!({
         "chunk": [

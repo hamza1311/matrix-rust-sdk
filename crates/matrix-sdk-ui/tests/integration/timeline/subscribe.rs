@@ -40,7 +40,7 @@ async fn batched() {
 
     let room = client.get_room(room_id).unwrap();
     let timeline = room.timeline_builder().event_filter(|_| true).build().await;
-    let (_, mut timeline_stream) = timeline.subscribe_batched().await;
+    let (_, mut timeline_stream) = timeline.subscribe().await;
 
     let hdl = tokio::spawn(async move {
         let next_batch = timeline_stream.next().await.unwrap();
@@ -76,7 +76,7 @@ async fn event_filter() {
 
     let room = client.get_room(room_id).unwrap();
     let timeline = room.timeline_builder().event_filter(|_| true).build().await;
-    let (_, mut timeline_stream) = timeline.subscribe().await;
+    let (_, mut timeline_stream) = timeline.subscribe_flat().await;
 
     let first_event_id = event_id!("$YTQwYl2ply");
     ev_builder.add_joined_room(JoinedRoomBuilder::new(room_id).add_timeline_event(

@@ -22,6 +22,7 @@ use async_std::sync::{Condvar, Mutex};
 use eyeball::{SharedObservable, Subscriber};
 use eyeball_im::VectorDiff;
 use futures_core::Stream;
+use futures_util::{stream, StreamExt};
 use imbl::Vector;
 use matrix_sdk::{
     attachment::AttachmentConfig,
@@ -88,7 +89,7 @@ pub use self::{
     virtual_item::VirtualTimelineItem,
 };
 use self::{
-    inner::{ReactionAction, TimelineInner, TimelineInnerState},
+    inner::{ReactionAction, TimelineInner},
     queue::LocalMessage,
     reactions::ReactionToggleResult,
     util::rfind_event_by_id,
@@ -301,22 +302,18 @@ impl Timeline {
     /// [`futures_util::StreamExt`] for a high-level API on top of [`Stream`].
     pub async fn subscribe(
         &self,
-    ) -> (Vector<Arc<TimelineItem>>, impl Stream<Item = VectorDiff<Arc<TimelineItem>>>) {
+    ) -> (Vector<Arc<TimelineItem>>, impl Stream<Item = Vec<VectorDiff<Arc<TimelineItem>>>>) {
         let (items, stream) = self.inner.subscribe().await;
         let stream = TimelineStream::new(stream, self.drop_handle.clone());
         (items, stream)
     }
 
-    /// Get the current timeline items, and a batched stream of changes.
-    ///
-    /// In contrast to [`subscribe`](Self::subscribe), this stream can yield
-    /// multiple diffs at once. The batching is done such that no arbitrary
-    /// delays are added.
-    pub async fn subscribe_batched(
+    /// Get the current timeline items, and a stream of changes, not batched.
+    pub async fn subscribe_flat(
         &self,
-    ) -> (Vector<Arc<TimelineItem>>, impl Stream<Item = Vec<VectorDiff<Arc<TimelineItem>>>>) {
-        let (items, stream) = self.inner.subscribe_batched().await;
-        let stream = TimelineStream::new(stream, self.drop_handle.clone());
+    ) -> (Vector<Arc<TimelineItem>>, impl Stream<Item = VectorDiff<Arc<TimelineItem>>>) {
+        let (items, stream) = self.inner.subscribe().await;
+        let stream = TimelineStream::new(stream.flat_map(stream::iter), self.drop_handle.clone());
         (items, stream)
     }
 
@@ -663,7 +660,7 @@ impl Timeline {
         f: impl Fn(Arc<TimelineItem>) -> Option<U>,
     ) -> (Vector<U>, impl Stream<Item = VectorDiff<U>>) {
         let (items, stream) = self.inner.subscribe_filter_map(f).await;
-        let stream = TimelineStream::new(stream, self.drop_handle.clone());
+        let stream = TimelineStream::new(stream.flat_map(stream::iter), self.drop_handle.clone());
         (items, stream)
     }
 }

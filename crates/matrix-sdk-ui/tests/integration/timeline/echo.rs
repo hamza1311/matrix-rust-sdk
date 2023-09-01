@@ -51,7 +51,7 @@ async fn echo() {
 
     let room = client.get_room(room_id).unwrap();
     let timeline = Arc::new(room.timeline().await);
-    let (_, mut timeline_stream) = timeline.subscribe().await;
+    let (_, mut timeline_stream) = timeline.subscribe_flat().await;
 
     let event_id = event_id!("$wWgymRfo7ri1uQx0NXO40vLJ");
     let txn_id: &TransactionId = "my-txn-id".into();
@@ -203,7 +203,7 @@ async fn dedup_by_event_id_late() {
 
     let room = client.get_room(room_id).unwrap();
     let timeline = Arc::new(room.timeline().await);
-    let (_, mut timeline_stream) = timeline.subscribe().await;
+    let (_, mut timeline_stream) = timeline.subscribe_flat().await;
 
     let event_id = event_id!("$wWgymRfo7ri1uQx0NXO40vLJ");
     let txn_id: &TransactionId = "my-txn-id".into();

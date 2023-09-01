@@ -8,7 +8,7 @@ use std::{
 };
 
 use eyeball::Observable;
-use eyeball_im::ObservableVector;
+use eyeball_im::ObservableVector2;
 use imbl::Vector;
 use ruma::{
     api::client::sync::sync_events::v4,
@@ -225,7 +225,7 @@ impl SlidingSyncListBuilder {
                 maximum_number_of_rooms: StdRwLock::new(Observable::new(None)),
                 // We want to avoid triggering `VectorDiff::Reset` too much, hence we
                 // increase the observable capacity.
-                room_list: StdRwLock::new(ObservableVector::with_capacity(64)),
+                room_list: StdRwLock::new(ObservableVector2::with_capacity(64)),
 
                 // Internal data.
                 sliding_sync_internal_channel_sender,
@@ -260,7 +260,7 @@ impl SlidingSyncListBuilder {
 
             let mut prev_room_list = list.inner.room_list.write().unwrap();
             assert!(prev_room_list.is_empty(), "room list was empty on creation above!");
-            prev_room_list.append(room_list);
+            prev_room_list.write().append(room_list);
         }
 
         list

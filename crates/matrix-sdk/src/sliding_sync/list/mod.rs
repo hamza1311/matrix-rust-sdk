@@ -13,8 +13,8 @@ use std::{
 };
 
 use eyeball::Observable;
-use eyeball_im::{ObservableVector, VectorDiff, VectorSubscriber};
-use eyeball_im_util::{vector, VectorExt};
+use eyeball_im::{ObservableVector2, ObservableVector2WriteGuard, VectorDiff, VectorSubscriber2};
+use eyeball_im_util::{vector2, Vector2Ext};
 use futures_core::Stream;
 use imbl::Vector;
 use ruma::{api::client::sync::sync_events::v4, assign, OwnedRoomId, TransactionId};
@@ -150,10 +150,10 @@ impl SlidingSyncList {
     /// entries.
     pub fn room_list_stream(
         &self,
-    ) -> (Vector<RoomListEntry>, impl Stream<Item = VectorDiff<RoomListEntry>>) {
+    ) -> (Vector<RoomListEntry>, impl Stream<Item = Vec<VectorDiff<RoomListEntry>>>) {
         let read_lock = self.inner.room_list.read().unwrap();
         let previous_values = (*read_lock).clone();
-        let subscriber = ObservableVector::subscribe(&read_lock);
+        let subscriber = ObservableVector2::subscribe(&read_lock);
 
         (previous_values, subscriber)
     }
@@ -165,11 +165,11 @@ impl SlidingSyncList {
     pub fn room_list_filtered_stream<F>(
         &self,
         filter: F,
-    ) -> (Vector<RoomListEntry>, vector::Filter<VectorSubscriber<RoomListEntry>, F>)
+    ) -> (Vector<RoomListEntry>, vector2::Filter<VectorSubscriber2<RoomListEntry>, F>)
     where
         F: Fn(&RoomListEntry) -> bool,
     {
-        ObservableVector::subscribe_filter(&self.inner.room_list.read().unwrap(), filter)
+        ObservableVector2::subscribe_filter(&self.inner.room_list.read().unwrap(), filter)
     }
 
     /// Get the maximum number of rooms. See [`Self::maximum_number_of_rooms`]
@@ -300,7 +300,7 @@ pub(super) struct SlidingSyncListInner {
     maximum_number_of_rooms: StdRwLock<Observable<Option<u32>>>,
 
     /// The rooms in order.
-    room_list: StdRwLock<ObservableVector<RoomListEntry>>,
+    room_list: StdRwLock<ObservableVector2<RoomListEntry>>,
 
     /// The request generator, i.e. a type that yields the appropriate list
     /// request. See [`SlidingSyncListRequestGenerator`] to learn more.
@@ -410,7 +410,7 @@ impl SlidingSyncListInner {
                 .saturating_sub(self.room_list.read().unwrap().len());
 
             if number_of_missing_rooms > 0 {
-                self.room_list.write().unwrap().append(
+                self.room_list.write().unwrap().write().append(
                     iter::repeat(RoomListEntry::Empty).take(number_of_missing_rooms).collect(),
                 );
 
@@ -431,6 +431,7 @@ impl SlidingSyncListInner {
 
         {
             let mut room_list = self.room_list.write().unwrap();
+            let mut room_list = room_list.write();
 
             // Run the sync operations.
             let mut rooms_that_have_received_an_update =
@@ -500,7 +501,7 @@ impl SlidingSyncListInner {
 
 fn apply_sync_operations(
     operations: &[v4::SyncOp],
-    room_list: &mut ObservableVector<RoomListEntry>,
+    room_list: &mut ObservableVector2WriteGuard<'_, RoomListEntry>,
     rooms_that_have_received_an_update: &mut HashSet<OwnedRoomId>,
 ) -> Result<(), Error> {
     for operation in operations {
@@ -893,7 +894,7 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
-    use eyeball_im::{ObservableVector, VectorDiff};
+    use eyeball_im::{ObservableVector2, VectorDiff};
     use futures_util::StreamExt;
     use imbl::vector;
     use matrix_sdk_test::async_test;
@@ -1576,20 +1577,16 @@ mod tests {
         // forever.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        // `room3` has been modified by a `SYNC` operation.
         assert_eq!(
             room_list_stream_receiver.try_recv(),
-            Ok(VectorDiff::Set { index: 3, value: RoomListEntry::Filled(room3.to_owned()) })
-        );
-        // `room4` has been modified by a `SYNC` operation.
-        assert_eq!(
-            room_list_stream_receiver.try_recv(),
-            Ok(VectorDiff::Set { index: 4, value: RoomListEntry::Filled(room4.to_owned()) })
-        );
-        // `room2` has been modified by another update (like a new event).
-        assert_eq!(
-            room_list_stream_receiver.try_recv(),
-            Ok(VectorDiff::Set { index: 2, value: RoomListEntry::Filled(room2.to_owned()) })
+            Ok(vec![
+                // `room3` has been modified by a `SYNC` operation.
+                VectorDiff::Set { index: 3, value: RoomListEntry::Filled(room3.to_owned()) },
+                // `room4` has been modified by a `SYNC` operation.
+                VectorDiff::Set { index: 4, value: RoomListEntry::Filled(room4.to_owned()) },
+                // `room2` has been modified by another update (like a new event).
+                VectorDiff::Set { index: 2, value: RoomListEntry::Filled(room2.to_owned()) },
+            ])
         );
     }
 
@@ -1667,7 +1664,7 @@ mod tests {
             $( , rooms = [ $( $expected_rooms:literal ),* ] )?
             $(,)?
         ) => {
-            let mut room_list = ObservableVector::from(entries![ $( $room_list_entries )* ]);
+            let mut room_list = ObservableVector2::from(entries![ $( $room_list_entries )* ]);
             let operations: &[v4::SyncOp] = &[
                 $(
                     serde_json::from_value(json!({
@@ -1686,7 +1683,11 @@ mod tests {
                 }
             )?
 
-            let result = apply_sync_operations(operations, &mut room_list, &mut rooms_that_have_received_an_update);
+            let result = apply_sync_operations(
+                operations,
+                &mut room_list.write(),
+                &mut rooms_that_have_received_an_update,
+            );
 
             assert!(result.$result(), "{}; assert the `Result`", $assert_description);
             assert_eq!(

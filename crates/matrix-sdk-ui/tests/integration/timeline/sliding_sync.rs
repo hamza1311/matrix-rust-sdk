@@ -254,7 +254,7 @@ async fn timeline(
         .timeline()
         .await
         .context("`timeline`")?
-        .subscribe()
+        .subscribe_flat()
         .await)
 }
 

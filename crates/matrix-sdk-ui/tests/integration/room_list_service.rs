@@ -2272,7 +2272,7 @@ async fn test_room_timeline() -> Result<(), Error> {
     let room = room_list.room(room_id).await?;
     let timeline = room.timeline().await;
 
-    let (previous_timeline_items, mut timeline_items_stream) = timeline.subscribe().await;
+    let (previous_timeline_items, mut timeline_items_stream) = timeline.subscribe_flat().await;
 
     sync_then_assert_request_and_fake_response! {
         [server, room_list, sync]

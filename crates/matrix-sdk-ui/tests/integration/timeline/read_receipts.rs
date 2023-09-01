@@ -57,7 +57,7 @@ async fn read_receipts_updates() {
 
     let room = client.get_room(room_id).unwrap();
     let timeline = room.timeline().await;
-    let (items, mut timeline_stream) = timeline.subscribe().await;
+    let (items, mut timeline_stream) = timeline.subscribe_flat().await;
 
     assert!(items.is_empty());
 

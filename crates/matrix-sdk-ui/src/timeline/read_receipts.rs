@@ -14,7 +14,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use eyeball_im::ObservableVector;
+use eyeball_im::ObservableVector2WriteGuard;
 use indexmap::IndexMap;
 use matrix_sdk::Room;
 use ruma::{
@@ -25,7 +25,7 @@ use tracing::{error, warn};
 
 use super::{
     event_item::EventTimelineItemKind,
-    inner::TimelineInnerState,
+    inner::TimelineInnerStateWriteGuard,
     item::timeline_item,
     traits::RoomDataProvider,
     util::{compare_events_positions, rfind_event_by_id, RelativePosition},
@@ -39,7 +39,7 @@ struct FullReceipt<'a> {
     receipt: &'a Receipt,
 }
 
-impl TimelineInnerState {
+impl TimelineInnerStateWriteGuard<'_> {
     /// Update the new item pointed to by the user's read receipt.
     fn add_read_receipt(
         &mut self,
@@ -87,7 +87,7 @@ impl TimelineInnerState {
                         receipt_item_pos,
                         is_own_user_id,
                         &mut self.items,
-                        &mut self.users_read_receipts,
+                        &mut self.meta.users_read_receipts,
                     );
 
                     if read_receipt_updated && !is_own_user_id {
@@ -115,8 +115,9 @@ impl TimelineInnerState {
         for (user_id, receipt) in read_receipts.clone() {
             // Only insert the read receipt if the user is not known to avoid conflicts with
             // `TimelineInner::handle_read_receipts`.
-            if !self.users_read_receipts.contains_key(&user_id) {
-                self.users_read_receipts
+            if !self.meta.users_read_receipts.contains_key(&user_id) {
+                self.meta
+                    .users_read_receipts
                     .entry(user_id)
                     .or_default()
                     .insert(ReceiptType::Read, (event_id.to_owned(), receipt));
@@ -135,6 +136,7 @@ impl TimelineInnerState {
         room: &Room,
     ) -> Option<(OwnedEventId, Receipt)> {
         if let Some(receipt) = self
+            .meta
             .users_read_receipts
             .get(user_id)
             .and_then(|user_map| user_map.get(&receipt_type))
@@ -208,7 +210,7 @@ pub(super) fn maybe_add_implicit_read_receipt(
     item_pos: usize,
     event_item: &mut EventTimelineItem,
     is_own_event: bool,
-    timeline_items: &mut ObservableVector<Arc<TimelineItem>>,
+    timeline_items: &mut ObservableVector2WriteGuard<'_, Arc<TimelineItem>>,
     users_read_receipts: &mut HashMap<OwnedUserId, HashMap<ReceiptType, (OwnedEventId, Receipt)>>,
 ) {
     let EventTimelineItemKind::Remote(remote_event_item) = &mut event_item.kind else {
@@ -250,7 +252,7 @@ fn maybe_update_read_receipt(
     receipt: FullReceipt<'_>,
     new_item_pos: Option<usize>,
     is_own_user_id: bool,
-    timeline_items: &mut ObservableVector<Arc<TimelineItem>>,
+    timeline_items: &mut ObservableVector2WriteGuard<'_, Arc<TimelineItem>>,
     users_read_receipts: &mut HashMap<OwnedUserId, HashMap<ReceiptType, (OwnedEventId, Receipt)>>,
 ) -> bool {
     let old_event_id = users_read_receipts

@@ -57,7 +57,7 @@ async fn edit() {
 
     let room = client.get_room(room_id).unwrap();
     let timeline = room.timeline().await;
-    let (_, mut timeline_stream) = timeline.subscribe().await;
+    let (_, mut timeline_stream) = timeline.subscribe_flat().await;
 
     ev_builder.add_joined_room(JoinedRoomBuilder::new(room_id).add_timeline_event(
         TimelineTestEvent::Custom(json!({
@@ -171,7 +171,7 @@ async fn reaction() {
 
     let room = client.get_room(room_id).unwrap();
     let timeline = room.timeline().await;
-    let (_, mut timeline_stream) = timeline.subscribe().await;
+    let (_, mut timeline_stream) = timeline.subscribe_flat().await;
 
     ev_builder.add_joined_room(
         JoinedRoomBuilder::new(room_id)
@@ -269,7 +269,7 @@ async fn redacted_message() {
 
     let room = client.get_room(room_id).unwrap();
     let timeline = room.timeline().await;
-    let (_, mut timeline_stream) = timeline.subscribe().await;
+    let (_, mut timeline_stream) = timeline.subscribe_flat().await;
 
     ev_builder.add_joined_room(
         JoinedRoomBuilder::new(room_id)
@@ -332,7 +332,7 @@ async fn read_marker() {
 
     let room = client.get_room(room_id).unwrap();
     let timeline = room.timeline().await;
-    let (_, mut timeline_stream) = timeline.subscribe().await;
+    let (_, mut timeline_stream) = timeline.subscribe_flat().await;
 
     ev_builder.add_joined_room(JoinedRoomBuilder::new(room_id).add_timeline_event(
         TimelineTestEvent::Custom(json!({
@@ -407,7 +407,7 @@ async fn in_reply_to_details() {
 
     let room = client.get_room(room_id).unwrap();
     let timeline = room.timeline().await;
-    let (_, mut timeline_stream) = timeline.subscribe().await;
+    let (_, mut timeline_stream) = timeline.subscribe_flat().await;
 
     // The event doesn't exist.
     assert_matches!(
@@ -568,7 +568,7 @@ async fn sync_highlighted() {
 
     let room = client.get_room(room_id).unwrap();
     let timeline = room.timeline().await;
-    let (_, mut timeline_stream) = timeline.subscribe().await;
+    let (_, mut timeline_stream) = timeline.subscribe_flat().await;
 
     ev_builder.add_joined_room(JoinedRoomBuilder::new(room_id).add_timeline_event(
         TimelineTestEvent::Custom(json!({

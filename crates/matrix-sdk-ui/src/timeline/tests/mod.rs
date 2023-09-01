@@ -26,7 +26,7 @@ use assert_matches::assert_matches;
 use async_trait::async_trait;
 use eyeball_im::VectorDiff;
 use futures_core::Stream;
-use futures_util::{FutureExt, StreamExt};
+use futures_util::{stream, FutureExt, StreamExt};
 use indexmap::IndexMap;
 use matrix_sdk::deserialized_responses::{SyncTimelineEvent, TimelineEvent};
 use once_cell::sync::Lazy;
@@ -98,14 +98,14 @@ impl TestTimeline {
     async fn subscribe(&self) -> impl Stream<Item = VectorDiff<Arc<TimelineItem>>> {
         let (items, stream) = self.inner.subscribe().await;
         assert_eq!(items.len(), 0, "Please subscribe to TestTimeline before adding items to it");
-        stream
+        stream.flat_map(stream::iter)
     }
 
     async fn subscribe_events(&self) -> impl Stream<Item = VectorDiff<EventTimelineItem>> {
         let (items, stream) =
             self.inner.subscribe_filter_map(|item| item.as_event().cloned()).await;
         assert_eq!(items.len(), 0, "Please subscribe to TestTimeline before adding items to it");
-        stream
+        stream.flat_map(stream::iter)
     }
 
     async fn len(&self) -> usize {

@@ -253,7 +253,7 @@ impl Room {
             })
             .clone();
 
-        let (timeline_items, timeline_stream) = timeline.subscribe_batched().await;
+        let (timeline_items, timeline_stream) = timeline.subscribe().await;
         let timeline_stream = TaskHandle::new(RUNTIME.spawn(async move {
             pin_mut!(timeline_stream);
 

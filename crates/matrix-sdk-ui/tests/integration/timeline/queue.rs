@@ -227,7 +227,7 @@ async fn clear_with_echoes() {
 
     // Send a message without mocking the server response.
     {
-        let (_, mut timeline_stream) = timeline.subscribe().await;
+        let (_, mut timeline_stream) = timeline.subscribe_flat().await;
 
         timeline.send(RoomMessageEventContent::text_plain("Send failure").into(), None).await;
 

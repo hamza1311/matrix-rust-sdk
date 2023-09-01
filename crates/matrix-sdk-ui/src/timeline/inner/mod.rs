@@ -16,10 +16,8 @@
 use std::collections::BTreeSet;
 use std::{fmt, sync::Arc};
 
-use async_rx::StreamExt as _;
-use eyeball_im::{ObservableVectorEntry, VectorDiff, VectorSubscriber};
-use eyeball_im_util::{vector, VectorExt};
-use futures_core::Stream;
+use eyeball_im::{ObservableVector2Entry, VectorSubscriber2};
+use eyeball_im_util::{vector2, Vector2Ext};
 use imbl::Vector;
 use itertools::Itertools;
 #[cfg(all(test, feature = "e2e-encryption"))]
@@ -46,6 +44,7 @@ use ruma::{
     },
     EventId, OwnedEventId, OwnedTransactionId, TransactionId, UserId,
 };
+use tokio::sync::{Mutex, MutexGuard};
 use tracing::{debug, error, field::debug, info, instrument, trace, warn};
 #[cfg(feature = "e2e-encryption")]
 use tracing::{field, info_span, Instrument as _};
@@ -65,12 +64,13 @@ use super::{
 
 mod state;
 
-pub(super) use self::state::TimelineInnerState;
-use self::state::{TimelineInnerStateLock, TimelineInnerStateLockGuard};
+pub(super) use self::state::{
+    TimelineInnerMetadata, TimelineInnerState, TimelineInnerStateWriteGuard,
+};
 
 #[derive(Clone, Debug)]
 pub(super) struct TimelineInner<P: RoomDataProvider = Room> {
-    state: TimelineInnerStateLock,
+    state: Arc<Mutex<TimelineInnerState>>,
     room_data_provider: P,
     settings: TimelineInnerSettings,
 }
@@ -126,7 +126,7 @@ impl<P: RoomDataProvider> TimelineInner<P> {
     pub(super) fn new(room_data_provider: P) -> Self {
         let state = TimelineInnerState::new(room_data_provider.room_version());
         Self {
-            state: TimelineInnerStateLock::new(state),
+            state: Arc::new(Mutex::new(state)),
             room_data_provider,
             settings: TimelineInnerSettings::default(),
         }
@@ -146,7 +146,7 @@ impl<P: RoomDataProvider> TimelineInner<P> {
 
     pub(super) async fn subscribe(
         &self,
-    ) -> (Vector<Arc<TimelineItem>>, VectorSubscriber<Arc<TimelineItem>>) {
+    ) -> (Vector<Arc<TimelineItem>>, VectorSubscriber2<Arc<TimelineItem>>) {
         trace!("Creating timeline items signal");
         let state = self.state.lock().await;
         // auto-deref to the inner vector's clone method
@@ -155,18 +155,10 @@ impl<P: RoomDataProvider> TimelineInner<P> {
         (items, stream)
     }
 
-    pub(super) async fn subscribe_batched(
-        &self,
-    ) -> (Vector<Arc<TimelineItem>>, impl Stream<Item = Vec<VectorDiff<Arc<TimelineItem>>>>) {
-        let (items, stream) = self.subscribe().await;
-        let stream = stream.batch_with(self.state.subscribe_lock_release());
-        (items, stream)
-    }
-
     pub(super) async fn subscribe_filter_map<U, F>(
         &self,
         f: F,
-    ) -> (Vector<U>, vector::FilterMap<VectorSubscriber<Arc<TimelineItem>>, F>)
+    ) -> (Vector<U>, vector2::FilterMap<VectorSubscriber2<Arc<TimelineItem>>, F>)
     where
         U: Clone,
         F: Fn(Arc<TimelineItem>) -> Option<U>,
@@ -213,7 +205,8 @@ impl<P: RoomDataProvider> TimelineInner<P> {
             (None, None) => {
                 // No record of the reaction, create a local echo
 
-                let in_flight = state.in_flight_reaction.get::<AnnotationKey>(&annotation.into());
+                let in_flight =
+                    state.meta.in_flight_reaction.get::<AnnotationKey>(&annotation.into());
                 let txn_id = match in_flight {
                     Some(ReactionState::Sending(txn_id)) => {
                         // Use the transaction ID as the in flight request
@@ -259,10 +252,10 @@ impl<P: RoomDataProvider> TimelineInner<P> {
             }
         };
 
-        state.reaction_state.insert(annotation.into(), reaction_state.clone());
+        state.meta.reaction_state.insert(annotation.into(), reaction_state.clone());
 
         // Check the action to perform depending on any in flight request
-        let in_flight = state.in_flight_reaction.get::<AnnotationKey>(&annotation.into());
+        let in_flight = state.meta.in_flight_reaction.get::<AnnotationKey>(&annotation.into());
         let result = match in_flight {
             Some(_) => {
                 // There is an in-flight request
@@ -287,7 +280,7 @@ impl<P: RoomDataProvider> TimelineInner<P> {
             ReactionAction::None => {}
             ReactionAction::SendRemote(_) | ReactionAction::RedactRemote(_) => {
                 // Remember the new in flight request
-                state.in_flight_reaction.insert(annotation.into(), reaction_state);
+                state.meta.in_flight_reaction.insert(annotation.into(), reaction_state);
             }
         };
 
@@ -303,6 +296,7 @@ impl<P: RoomDataProvider> TimelineInner<P> {
         self.state
             .lock()
             .await
+            .meta
             .users_read_receipts
             .entry(own_user_id)
             .or_default()
@@ -318,6 +312,7 @@ impl<P: RoomDataProvider> TimelineInner<P> {
         debug!("Adding {} initial events", events.len());
 
         let mut state = self.state.lock().await;
+        let mut state = state.write();
         for event in events {
             state
                 .handle_remote_event(
@@ -332,12 +327,13 @@ impl<P: RoomDataProvider> TimelineInner<P> {
 
     pub(super) async fn clear(&self) {
         trace!("Clearing timeline");
-        self.state.lock().await.clear();
+        self.state.lock().await.write().clear();
     }
 
     #[instrument(skip_all)]
     pub(super) async fn handle_joined_room_update(&self, update: JoinedRoom) {
         let mut state = self.state.lock().await;
+        let mut state = state.write();
         state.handle_sync_timeline(update.timeline, &self.room_data_provider, &self.settings).await;
 
         trace!("Handling account data");
@@ -374,6 +370,7 @@ impl<P: RoomDataProvider> TimelineInner<P> {
         self.state
             .lock()
             .await
+            .write()
             .handle_sync_timeline(timeline, &self.room_data_provider, &self.settings)
             .await;
     }
@@ -383,6 +380,7 @@ impl<P: RoomDataProvider> TimelineInner<P> {
         self.state
             .lock()
             .await
+            .write()
             .handle_live_event(event, &self.room_data_provider, &self.settings)
             .await;
     }
@@ -426,6 +424,7 @@ impl<P: RoomDataProvider> TimelineInner<P> {
         send_state: EventSendState,
     ) {
         let mut state = self.state.lock().await;
+        let mut items = state.items.write();
 
         let new_event_id: Option<&EventId> = match &send_state {
             EventSendState::Sent { event_id } => Some(event_id),
@@ -434,7 +433,7 @@ impl<P: RoomDataProvider> TimelineInner<P> {
 
         // The local echoes are always at the end of the timeline, we must first make
         // sure the remote echo hasn't showed up yet.
-        if rfind_event_item(&state.items, |it| {
+        if rfind_event_item(&items, |it| {
             new_event_id.is_some() && it.event_id() == new_event_id && it.as_remote().is_some()
         })
         .is_some()
@@ -442,25 +441,24 @@ impl<P: RoomDataProvider> TimelineInner<P> {
             // Remote echo already received. This is very unlikely.
             trace!("Remote echo received before send-event response");
 
-            let local_echo =
-                rfind_event_item(&state.items, |it| it.transaction_id() == Some(txn_id));
+            let local_echo = rfind_event_item(&items, |it| it.transaction_id() == Some(txn_id));
 
             // If there's both the remote echo and a local echo, that means the
             // remote echo was received before the response *and* contained no
             // transaction ID (and thus duplicated the local echo).
             if let Some((idx, _)) = local_echo {
                 warn!("Message echo got duplicated, removing the local one");
-                state.items.remove(idx);
+                items.remove(idx);
 
                 if idx == 0 {
                     error!("Inconsistent state: Local echo was not preceded by day divider");
                     return;
                 }
 
-                if idx == state.items.len() && state.items[idx - 1].is_day_divider() {
+                if idx == items.len() && items[idx - 1].is_day_divider() {
                     // The day divider may have been added for this local echo, remove it and let
                     // the next message decide whether it's required or not.
-                    state.items.remove(idx - 1);
+                    items.remove(idx - 1);
                 }
             }
 
@@ -468,7 +466,7 @@ impl<P: RoomDataProvider> TimelineInner<P> {
         }
 
         // Look for the local event by the transaction ID or event ID.
-        let result = rfind_event_item(&state.items, |it| {
+        let result = rfind_event_item(&items, |it| {
             it.transaction_id() == Some(txn_id)
                 || new_event_id.is_some()
                     && it.event_id() == new_event_id
@@ -496,21 +494,21 @@ impl<P: RoomDataProvider> TimelineInner<P> {
         let is_error = matches!(send_state, EventSendState::SendingFailed { .. });
 
         let new_item = item.with_inner_kind(local_item.with_send_state(send_state));
-        state.items.set(idx, new_item);
+        items.set(idx, new_item);
 
         if is_error {
             // When there is an error, sending further messages is paused. This
             // should be reflected in the timeline, so we set all other pending
             // events to cancelled.
-            let num_items = state.items.len();
+            let num_items = items.len();
             for idx in 0..num_items {
-                let item = state.items[idx].clone();
+                let item = items[idx].clone();
                 let Some(event_item) = item.as_event() else { continue };
                 let Some(local_item) = event_item.as_local() else { continue };
                 if matches!(&local_item.send_state, EventSendState::NotSentYet) {
                     let new_event_item =
                         event_item.with_kind(local_item.with_send_state(EventSendState::Cancelled));
-                    state.items.set(idx, item.with_kind(new_event_item));
+                    items.set(idx, item.with_kind(new_event_item));
                 }
             }
         }
@@ -531,6 +529,7 @@ impl<P: RoomDataProvider> TimelineInner<P> {
         let annotation_key: AnnotationKey = annotation.into();
 
         let reaction_state = state
+            .meta
             .reaction_state
             .get(&AnnotationKey::from(annotation))
             .expect("Reaction state should be set before sending the reaction");
@@ -539,6 +538,7 @@ impl<P: RoomDataProvider> TimelineInner<P> {
             (ReactionToggleResult::AddSuccess { event_id, .. }, ReactionState::Redacting(_)) => {
                 // A reaction was added successfully but we've been requested to undo it
                 state
+                    .meta
                     .in_flight_reaction
                     .insert(annotation_key, ReactionState::Redacting(Some(event_id.to_owned())));
                 ReactionAction::RedactRemote(event_id.to_owned())
@@ -547,14 +547,15 @@ impl<P: RoomDataProvider> TimelineInner<P> {
                 // A reaction was was redacted successfully but we've been requested to undo it
                 let txn_id = txn_id.to_owned();
                 state
+                    .meta
                     .in_flight_reaction
                     .insert(annotation_key, ReactionState::Sending(txn_id.clone()));
                 ReactionAction::SendRemote(txn_id)
             }
             _ => {
                 // We're done, so also update the timeline
-                state.in_flight_reaction.remove(&annotation_key);
-                state.reaction_state.remove(&annotation_key);
+                state.meta.in_flight_reaction.remove(&annotation_key);
+                state.meta.reaction_state.remove(&annotation_key);
                 state.update_timeline_reaction(user_id, annotation, result)?;
 
                 ReactionAction::None
@@ -569,8 +570,9 @@ impl<P: RoomDataProvider> TimelineInner<P> {
         txn_id: &TransactionId,
     ) -> Option<TimelineItemContent> {
         let mut state = self.state.lock().await;
+        let mut items = state.items.write();
 
-        let (idx, item) = rfind_event_item(&state.items, |it| it.transaction_id() == Some(txn_id))?;
+        let (idx, item) = rfind_event_item(&items, |it| it.transaction_id() == Some(txn_id))?;
         let local_item = item.as_local()?;
 
         match &local_item.send_state {
@@ -587,18 +589,18 @@ impl<P: RoomDataProvider> TimelineInner<P> {
 
         let new_item = item.with_inner_kind(local_item.with_send_state(EventSendState::NotSentYet));
         let content = item.content.clone();
-        state.items.remove(idx);
-        state.items.push_back(new_item);
+        items.remove(idx);
+        items.push_back(new_item);
 
         Some(content)
     }
 
     pub(super) async fn discard_local_echo(&self, txn_id: &TransactionId) -> bool {
         let mut state = self.state.lock().await;
-        if let Some((idx, _)) =
-            rfind_event_item(&state.items, |it| it.transaction_id() == Some(txn_id))
-        {
-            state.items.remove(idx);
+        let mut items = state.items.write();
+
+        if let Some((idx, _)) = rfind_event_item(&items, |it| it.transaction_id() == Some(txn_id)) {
+            items.remove(idx);
             true
         } else {
             false
@@ -616,6 +618,7 @@ impl<P: RoomDataProvider> TimelineInner<P> {
         events: Vec<TimelineEvent>,
     ) -> Option<HandleManyEventsResult> {
         let mut state = self.state.lock().await;
+        let mut state = state.write();
 
         let mut total = HandleManyEventsResult::default();
         for event in events {
@@ -636,7 +639,7 @@ impl<P: RoomDataProvider> TimelineInner<P> {
     }
 
     pub(super) async fn set_fully_read_event(&self, fully_read_event_id: OwnedEventId) {
-        self.state.lock().await.set_fully_read_event(fully_read_event_id)
+        self.state.lock().await.write().set_fully_read_event(fully_read_event_id)
     }
 
     #[cfg(feature = "e2e-encryption")]
@@ -755,6 +758,8 @@ impl<P: RoomDataProvider> TimelineInner<P> {
                 ))
             };
 
+            let mut state = state.write();
+
             // Loop through all the indices, in order so we don't decrypt edits
             // before the event being edited, if both were UTD. Keep track of
             // index change as UTDs are removed instead of updated.
@@ -797,13 +802,13 @@ impl<P: RoomDataProvider> TimelineInner<P> {
     }
 
     async fn set_non_ready_sender_profiles(&self, profile_state: TimelineDetails<Profile>) {
-        self.state.lock().await.items.for_each(|mut entry| {
+        self.state.lock().await.items.write().for_each(|mut entry| {
             let Some(event_item) = entry.as_event() else { return };
             if !matches!(event_item.sender_profile(), TimelineDetails::Ready(_)) {
                 let new_item = entry.with_kind(TimelineItemKind::Event(
                     event_item.with_sender_profile(profile_state.clone()),
                 ));
-                ObservableVectorEntry::set(&mut entry, new_item);
+                ObservableVector2Entry::set(&mut entry, new_item);
             }
         });
     }
@@ -812,7 +817,8 @@ impl<P: RoomDataProvider> TimelineInner<P> {
         trace!("Updating sender profiles");
 
         let mut state = self.state.lock().await;
-        let mut entries = state.items.entries();
+        let mut items = state.items.write();
+        let mut entries = items.entries();
         while let Some(mut entry) = entries.next() {
             let Some(event_item) = entry.as_event() else { continue };
             let event_id = event_item.event_id().map(debug);
@@ -829,7 +835,7 @@ impl<P: RoomDataProvider> TimelineInner<P> {
                     let updated_item =
                         event_item.with_sender_profile(TimelineDetails::Ready(profile));
                     let new_item = entry.with_kind(updated_item);
-                    ObservableVectorEntry::set(&mut entry, new_item);
+                    ObservableVector2Entry::set(&mut entry, new_item);
                 }
                 None => {
                     if !event_item.sender_profile().is_unavailable() {
@@ -837,7 +843,7 @@ impl<P: RoomDataProvider> TimelineInner<P> {
                         let updated_item =
                             event_item.with_sender_profile(TimelineDetails::Unavailable);
                         let new_item = entry.with_kind(updated_item);
-                        ObservableVectorEntry::set(&mut entry, new_item);
+                        ObservableVector2Entry::set(&mut entry, new_item);
                     } else {
                         debug!(event_id, transaction_id, "Profile already marked unavailable");
                     }
@@ -851,7 +857,11 @@ impl<P: RoomDataProvider> TimelineInner<P> {
     #[cfg(test)]
     pub(super) async fn handle_read_receipts(&self, receipt_event_content: ReceiptEventContent) {
         let own_user_id = self.room_data_provider.own_user_id();
-        self.state.lock().await.handle_explicit_read_receipts(receipt_event_content, own_user_id);
+        self.state
+            .lock()
+            .await
+            .write()
+            .handle_explicit_read_receipts(receipt_event_content, own_user_id);
     }
 }
 
@@ -926,7 +936,8 @@ impl TimelineInner {
         // We need to be sure to have the latest position of the event as it might have
         // changed while waiting for the request.
         let mut state = self.state.lock().await;
-        let (index, item) = rfind_event_by_id(&state.items, &remote_item.event_id)
+        let mut items = state.items.write();
+        let (index, item) = rfind_event_by_id(&items, &remote_item.event_id)
             .ok_or(super::Error::RemoteEventNotInTimeline)?;
 
         // Check the state of the event again, it might have been redacted while
@@ -949,7 +960,7 @@ impl TimelineInner {
                 event,
             }),
         ));
-        state.items.set(index, timeline_item(item, internal_id));
+        items.set(index, timeline_item(item, internal_id));
 
         Ok(())
     }
@@ -961,10 +972,8 @@ impl TimelineInner {
         &self,
         user_id: &UserId,
     ) -> Option<(OwnedEventId, Receipt)> {
-        let state = self.state.lock().await;
         let room = self.room();
-
-        state.latest_user_read_receipt(user_id, room).await
+        self.state.lock().await.write().latest_user_read_receipt(user_id, room).await
     }
 
     /// Check whether the given receipt should be sent.
@@ -982,7 +991,8 @@ impl TimelineInner {
         }
 
         let own_user_id = self.room().own_user_id();
-        let state = self.state.lock().await;
+        let mut state = self.state.lock().await;
+        let state = state.write();
         let room = self.room();
 
         match receipt_type {
@@ -1036,7 +1046,7 @@ pub(super) struct HandleManyEventsResult {
 }
 
 async fn fetch_replied_to_event(
-    mut state: TimelineInnerStateLockGuard<'_>,
+    mut state: MutexGuard<'_, TimelineInnerState>,
     index: usize,
     item: &EventTimelineItem,
     message: &Message,
@@ -1061,8 +1071,8 @@ async fn fetch_replied_to_event(
     });
     let event_item = item.with_content(TimelineItemContent::Message(reply), None);
 
-    let new_timeline_item = state.new_timeline_item(event_item);
-    state.items.set(index, new_timeline_item);
+    let new_timeline_item = state.meta.new_timeline_item(event_item);
+    state.items.write().set(index, new_timeline_item);
 
     // Don't hold the state lock while the network request is made
     drop(state);
